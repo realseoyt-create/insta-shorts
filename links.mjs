@@ -58,6 +58,8 @@ export function buildLinksHtml(posts, { handle = "", mascot = "", notice = "" } 
   .btn:active { transform:translateY(1px); }
   .go { font-size:13px; font-weight:600; white-space:nowrap; opacity:.75; }
   .empty { text-align:center; color:var(--muted); padding:40px 0; }
+  #q { width:100%; font:inherit; font-size:16px; padding:13px 16px; border:2px solid var(--ink); border-radius:14px; background:#fff; color:var(--ink); margin-bottom:16px; }
+  [hidden] { display:none !important; }
   footer { text-align:center; color:var(--muted); font-size:12px; line-height:1.6; margin-top:26px; }
 </style>
 </head>
@@ -69,9 +71,20 @@ export function buildLinksHtml(posts, { handle = "", mascot = "", notice = "" } 
     <p>게시물에서 소개한 사이트로 바로 갈 수 있어요</p>
     ${name ? `<a class="insta" href="https://www.instagram.com/${esc(name)}/">인스타그램 ${esc(handle)}</a>` : ""}
   </header>
+  ${posts.length >= 4 ? `<input id="q" type="search" placeholder="🔍 게시물 제목이나 사이트 이름으로 찾기" autocomplete="off">` : ""}
   ${cards || `<p class="empty">곧 첫 꿀팁 링크가 올라와요 🐝</p>`}
+  <p class="empty" id="none" hidden>찾는 게시물이 없어요. 다른 낱말로 찾아보세요.</p>
   <footer>${notice ? `${esc(notice)}<br>` : ""}${mascot ? `${esc(mascot)}가 알려 주는 꿀팁` : ""}</footer>
 </main>
+<script>
+  // 게시물이 쌓여도 예전 것을 바로 찾을 수 있게: 제목이나 사이트 이름으로 걸러 보여 줌
+  var q = document.getElementById("q");
+  if (q) q.addEventListener("input", function () {
+    var word = q.value.trim().toLowerCase(), shown = 0;
+    document.querySelectorAll(".post").forEach(function (el) { var hit = !word || el.textContent.toLowerCase().indexOf(word) >= 0; el.hidden = !hit; if (hit) shown++; });
+    document.getElementById("none").hidden = shown > 0;
+  });
+</script>
 </body>
 </html>
 `;
