@@ -43,6 +43,7 @@ const SETTING_RULES = {                                  // 항목: 값이 맞�
   SCHEDULE: (v) => v === "" || TIMES.test(v), POST_TIMES: (v) => v === "" || TIMES.test(v),
   STOCK_TARGET: (v) => /^\d{1,2}$/.test(v) && Number(v) >= 1, DAILY_CARDS: (v) => /^[0-3]$/.test(v), DAILY_NEWS: (v) => /^[01]$/.test(v), SHOOT_PLANS: (v) => /^[0-5]$/.test(v),
   PAUSE_MAKE: (v) => /^[01]$/.test(v), PAUSE_POST: (v) => /^[01]$/.test(v),
+  LINKS_URL: (v) => v === "" || okUrl(v),              // 프로필에 거는 링크 페이지 주소 (비우면 GitHub Pages 주소). 같은 저장소를 Vercel 등에 연결했을 때 그 주소를 적음
 };
 const SECRET_SETTINGS = ["KOPIS_KEY", "TOUR_API_KEY"];   // 열쇠: 화면에는 "넣었는지"만 알려 주고 값은 돌려주지 않음
 let savedSettings = {};

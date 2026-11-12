@@ -185,6 +185,7 @@
   <label>검토 대기 + 발행 예약이 이만큼 쌓여 있으면 새로 만들기를 쉼</label><input id="sSTOCK_TARGET" type="number" min="1" max="30">
   <label>하루에 자동으로 만들 카드뉴스 수 (0~3)</label><input id="sDAILY_CARDS" type="number" min="0" max="3">
   <label>미리 만들어 둘 촬영 기획 수 (0~5)</label><input id="sSHOOT_PLANS" type="number" min="0" max="5">
+  <label>프로필 링크 주소 (비워 두면 깃허브 주소를 씁니다. Vercel에 연결했다면 그 주소를 적으세요)</label><input id="sLINKS_URL" placeholder="https://">
   <label class="chk"><input type="checkbox" id="sDAILY_NEWS">매일 "이번 주 소식"(할인·팝업·행사) 카드 만들기</label>
   <label class="chk"><input type="checkbox" id="sPAUSE_MAKE">🛌 새로 만들기 쉬기 (여행·휴가 때)</label>
   <label class="chk"><input type="checkbox" id="sPAUSE_POST">🛌 인스타그램에 올리기 쉬기 (승인한 것은 그대로 보관)</label>
@@ -538,7 +539,7 @@ async function downloadAll() {
 }
 
 // ── 설정 ──
-const SET_TEXT = ["SCHEDULE", "POST_TIMES", "STOCK_TARGET", "DAILY_CARDS", "SHOOT_PLANS"], SET_CHECK = ["DAILY_NEWS", "PAUSE_MAKE", "PAUSE_POST"], SET_KEY = ["KOPIS_KEY", "TOUR_API_KEY"];
+const SET_TEXT = ["SCHEDULE", "POST_TIMES", "STOCK_TARGET", "DAILY_CARDS", "SHOOT_PLANS", "LINKS_URL"], SET_CHECK = ["DAILY_NEWS", "PAUSE_MAKE", "PAUSE_POST"], SET_KEY = ["KOPIS_KEY", "TOUR_API_KEY"];
 function fillSet(s) {
   for (const k of SET_TEXT) $(`s${k}`).value = s[k] ?? "";
   for (const k of SET_CHECK) $(`s${k}`).checked = s[k] === "1";
