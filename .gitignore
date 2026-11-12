@@ -2,6 +2,7 @@ node_modules
 out
 data
 assets
+inbox
 logs
 .env
 .env.*

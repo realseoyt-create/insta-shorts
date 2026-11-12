@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
 import { ROOT, OUT, CONFIG, loadDb, updateDb, patchTip, collect, produce, runDaily, approveAndPublish, planShootItem, planCardItem, cardFromTip, refreshLinks, linksEnabled, linksUrl, approveTip, unapproveTip, publishNext, reviewTick, startTelegram, tgInfo, postTimes, upcomingSlots, saveClip, saveShot, resetTip, getLogs, log,
-  getSettings, saveSettings, testEvents, listSites, addSite, removeSite, reviseTip, saveText, publishFirst } from "./lib.mjs";
+  getSettings, saveSettings, testEvents, listSites, addSite, removeSite, reviseTip, saveText, publishFirst, scanInbox, saveInboxMeta, saveInboxFile, deleteMade } from "./lib.mjs";
 
 // 예상하지 못한 오류가 나도 서버가 통째로 꺼지지 않게 하고, 이유를 기록에 남김
 process.on("uncaughtException", (e) => log(`예상하지 못한 오류 (서버는 계속 실행): ${e?.stack ?? e}`));
@@ -55,6 +55,8 @@ const routes = {
   "GET /api/sites": async () => listSites(),
   "POST /api/sites": async (_, body) => addSite(body),
   "POST /api/sites/remove": async (_, body) => removeSite(body.url),
+  // 완성 영상 받기: 글(제목·캡션·출처)을 먼저 저장하고, 돌려받은 이름으로 /api/made/file/이름 에 영상을 올림
+  "POST /api/made/meta": async (_, body) => saveInboxMeta(body),
   "POST /api/collect": async () => bg(collect()),
   "POST /api/daily": async () => bg(daily()),
   "POST /api/tips": async (_, body) => {
@@ -82,7 +84,8 @@ const routes = {
   "POST /api/tips/:id/reset": async (id) => resetTip(id),
   "POST /api/tips/:id/revise": async (id, body) => reviseTip(id, body.instruction),              // 말로 고치기 (AI가 그 부분만 고쳐 다시 만듦)
   "POST /api/tips/:id/text": async (id, body) => saveText(id, body),                             // 캡션·해시태그만 고침 (다시 만들지 않음)
-  "POST /api/tips/:id/first": async (id) => publishFirst(id),                                    // 발행 예약의 맨 앞으로
+  "POST /api/tips/:id/delete": async (id) => deleteMade(id),                                     // 잘못 올린 완성 영상 지우기
+  "POST /api/tips/:id/first": async (id) => publishFirst(id),                                  // 발행 예약의 맨 앞으로
 };
 
 http.createServer(async (req, res) => {
@@ -111,6 +114,9 @@ http.createServer(async (req, res) => {
       }
       res.writeHead(200, { "Content-Type": "video/mp4", "Accept-Ranges": "bytes", "Content-Length": size });
       return createReadStream(file).pipe(res);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/made/file/")) {   // 완성 영상 파일 올리기
+      return json(res, 200, await saveInboxFile(decodeURIComponent(url.pathname.slice("/api/made/file/".length)), req));
     }
     const parts = url.pathname.split("/");                 // /api/tips/:id/action
     const id = parts[3] && parts[4] ? decodeURIComponent(parts[3]) : null;
@@ -151,6 +157,7 @@ setInterval(() => {
     if (process.env.PAUSE_POST === "1") log(`자동 발행 시각(${hm})이지만 설정에서 쉬기로 해 두어 건너뜁니다`);
     else { log(`자동 발행 시각 (${hm})`); publishNext().catch((e) => log(`자동 발행 오류: ${e.message}`)); }
   }
+  scanInbox().catch((e) => log(`완성 영상 확인 오류: ${e.message}`));      // inbox 폴더에 새로 들어온 완성 영상을 들여옴
   reviewTick();
 }, 20_000);
 startTelegram().catch((e) => log(`텔레그램 봇을 켜지 못했습니다: ${e.message}`));

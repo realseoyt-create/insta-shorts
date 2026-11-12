@@ -1051,6 +1051,7 @@ export async function produce(code, editedScript) {
   const db = await loadDb();
   const tip = db.find((t) => t.shortCode === code);
   if (!tip) throw new Error("소재를 찾을 수 없습니다");
+  if (tip.type === "made") throw new Error("완성해서 받은 영상은 여기서 다시 만들 수 없습니다. 영상을 고치려면 새로 만들어 다시 보내 주세요 (제목·캡션·해시태그는 고칠 수 있습니다)");
   if (tip.type === "shoot") return produceShoot(tip, editedScript);
   if (tip.type === "card") return produceCard(tip, editedScript);
   await patchTip(code, { status: "working", error: null });
@@ -1387,6 +1388,7 @@ export async function saveClip(code, n, stream, filename = "") {
 export const resetTip = async (code) => {
   const tip = (await loadDb()).find((t) => t.shortCode === code);
   if (tip?.type === "card") return patchTip(code, { status: tip.images?.length ? "pending" : "error", error: null });
+  if (tip?.type === "made") return patchTip(code, { status: tip.video ? "pending" : "rejected", error: null });
   return patchTip(code, { status: tip?.type === "shoot" ? (tip.script ? "shoot" : "error") : "new", error: null });
 };
 
@@ -1460,13 +1462,14 @@ export async function publishFirst(code) {
   return { ok: true, message: slot ? `다음 발행 시각(${slotText(slot)})에 맨 먼저 올라갑니다.` : "예약 순서의 맨 앞으로 옮겼습니다." };
 }
 // 캡션과 해시태그만 고침 (영상·카드를 다시 만들지 않음)
-export async function saveText(code, { caption, hashtags }) {
+export async function saveText(code, { caption, hashtags, hook }) {
   const tip = (await loadDb()).find((t) => t.shortCode === code);
   if (!tip?.script || !["pending", "approved"].includes(tip.status)) throw new Error("검토 대기나 발행 예약 상태에서만 글을 고칠 수 있습니다");
   const tags = String(hashtags ?? tip.script.hashtags).split(/\s+/).filter((t) => t && !t.includes("내돈내산")).join(" ");
-  await patchTip(code, { script: { ...tip.script, caption: String(caption ?? tip.script.caption).trim(), hashtags: tags } });
+  const title = tip.type === "made" && String(hook ?? "").trim() ? String(hook).trim().slice(0, 80) : tip.script.hook;   // 완성해서 받은 영상은 제목도 여기서 고침
+  await patchTip(code, { script: { ...tip.script, hook: title, caption: String(caption ?? tip.script.caption).trim(), hashtags: tags } });
   log(`글만 고침 ${code}`);
-  return { ok: true, caption: String(caption ?? tip.script.caption).trim(), hashtags: tags };
+  return { ok: true, caption: String(caption ?? tip.script.caption).trim(), hashtags: tags, hook: title };
 }
 
 export async function approveTip(code) {
@@ -1599,12 +1602,15 @@ async function reviseAndResend(tip, instruction, via = "텔레그램") {
   revising = true;
   try {
     log(`${via} 수정 요청 ${code}: ${instruction.slice(0, 80)}`);
-    const script = await reviseScript(tip, instruction);
-    await produce(code, script);                               // 고친 대본으로 다시 만들기
-    const after = (await loadDb()).find((t) => t.shortCode === code);
-    if (after.status !== "pending") {                          // 실패하면 원래 것을 검토 대기로 되돌려 둠
-      await patchTip(code, { status: "pending", error: null });
-      throw new Error(after.error ?? "다시 만들지 못했습니다");
+    if (tip.type === "made") await reviseMade(tip, instruction);   // 완성해서 받은 영상은 글만 고침
+    else {
+      const script = await reviseScript(tip, instruction);
+      await produce(code, script);                               // 고친 대본으로 다시 만들기
+      const after = (await loadDb()).find((t) => t.shortCode === code);
+      if (after.status !== "pending") {                          // 실패하면 원래 것을 검토 대기로 되돌려 둠
+        await patchTip(code, { status: "pending", error: null });
+        throw new Error(after.error ?? "다시 만들지 못했습니다");
+      }
     }
     await patchTip(code, { tg: { later: -1, revised: true } });   // 다음 검토 요청으로 맨 먼저 다시 보냄
   } catch (e) {
@@ -1612,6 +1618,148 @@ async function reviseAndResend(tip, instruction, via = "텔레그램") {
     if (via === "텔레그램") tgNotify(`⚠️ 고치지 못했습니다: ${e.message.slice(0, 300)}\n원래 것은 그대로 있습니다. 조금 다르게 말해 보시거나 PC 관리 화면에서 고쳐 주세요.`);
     else await patchTip(code, { error: `말로 고치기 실패: ${e.message.slice(0, 300)} — 원래 것은 그대로 있습니다. 조금 다르게 적어 보세요.` }).catch(() => {});
   } finally { revising = false; reviewTick(); }
+}
+
+// ── 완성 영상 받기: 에이전트(또는 사람)가 따로 만든 영상을 받아 같은 검토·승인·예약 흐름에 넣음 ──
+//   넣는 길 세 가지 (모두 inbox 폴더를 거침):
+//   1) inbox 폴더에 "이름.mp4"와 "이름.json"(또는 "이름.txt")을 저장  ← 같은 컴퓨터의 에이전트가 쓰는 길
+//   2) 관리 화면의 "완성 영상 올리기"
+//   3) 텔레그램 봇에게 영상을 보냄 (영상에 붙인 글이 제목과 캡션이 됨, 20MB까지)
+//   글 파일 형식 (json): {"title":"제목", "caption":"캡션", "hashtags":"#a #b", "sources":[{"text":"화면에 쓴 숫자·문장","source":"출처 이름","url":"https://"}], "notes":"만든 쪽의 메모"}
+//   글 파일 형식 (txt):  첫 줄 = 제목, 나머지 = 캡션 (맨 끝의 #태그 줄은 해시태그로)
+const INBOX = path.join(ROOT, "inbox");
+const inboxSeen = new Map();             // 파일 이름 → { size, first }: 다 써진 파일인지 확인하려고 두 번 봄
+let inboxBusy = false;
+const cleanName = (s) => String(s ?? "").replace(/[^\w가-힣-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "video";
+
+function readMeta(text, isJson) {
+  const s = (v) => String(v ?? "").trim();
+  if (isJson) {
+    const d = JSON.parse(text);
+    const sources = (Array.isArray(d.sources) ? d.sources : []).map((x) => (typeof x === "string" ? { text: s(x) } : { text: s(x?.text), source: s(x?.source), url: s(x?.url) })).filter((x) => x.text).slice(0, 12);
+    return { title: s(d.title), caption: s(d.caption), hashtags: Array.isArray(d.hashtags) ? d.hashtags.map(s).join(" ") : s(d.hashtags), sources, notes: s(d.notes) };
+  }
+  const lines = text.replace(/\r/g, "").split("\n");
+  const title = s(lines.find((l) => l.trim()));
+  let rest = lines.slice(lines.findIndex((l) => l.trim()) + 1);
+  const tags = [];
+  while (rest.length && (!rest.at(-1).trim() || /^(#\S+\s*)+$/.test(rest.at(-1).trim()))) { const l = rest.pop().trim(); if (l) tags.unshift(l); }
+  return { title, caption: rest.join("\n").trim() || title, hashtags: tags.join(" "), sources: [], notes: "" };   // 한 줄뿐이면 그 줄이 제목이자 캡션
+}
+
+async function importVideo(file, meta) {
+  const size = (await fs.stat(file)).size;
+  if (size < 50_000) throw new Error("영상 파일이 비어 있거나 너무 작습니다");
+  if (size > 100e6) throw new Error(`영상이 너무 큽니다 (${Math.round(size / 1e6)}MB). 100MB 이하로 만들어 주세요`);
+  const seconds = await parseFile(file).then((m) => m.format.duration ?? null, () => null);
+  if (seconds != null && (seconds < 3 || seconds > 180)) throw new Error(`영상 길이가 ${seconds.toFixed(1)}초입니다. 3초~3분 사이여야 합니다`);
+  const code = `made-${Date.now().toString(36)}`;
+  await fs.mkdir(OUT, { recursive: true });
+  await fs.copyFile(file, path.join(OUT, `${code}.mp4`));
+  const hashtags = meta.hashtags.split(/\s+/).filter((t) => t && !t.includes("내돈내산")).join(" ");
+  const title = (meta.title || meta.caption.split("\n")[0] || "완성 영상").slice(0, 80);
+  const checks = [
+    "따로 만들어 받은 영상입니다. AI 검수를 거치지 않았으니, 화면에 나오는 숫자·이름·출처가 맞는지 영상을 끝까지 보고 확인해 주세요.",
+    ...meta.sources.map((x) => `화면에 쓴 내용: ${x.text}${x.source || x.url ? ` (출처: ${[x.source, x.url].filter(Boolean).join(" ")})` : " (출처 없음)"}`),
+    ...(meta.caption ? [] : ["캡션이 비어 있습니다. 올라갈 글을 적어 주세요 (봇에게 \"캡션은 ○○로 해 줘\"라고 보내도 됩니다)."]),
+    ...(seconds == null ? ["영상 길이를 읽지 못했습니다. 재생이 되는지 확인해 주세요."] : []),
+  ];
+  const now = new Date().toISOString();
+  const tip = { shortCode: code, type: "made", source: "manual", url: "", owner: "완성 영상", views: 0, likes: 0, comments: 0, score: 0, tip_text: title, status: "pending", collected_at: now, rendered_at: now,
+    video: `${code}.mp4`, seconds, script: { hook: title, sub: "", slides: [], cta: "", caption: meta.caption, hashtags }, checks, fixed: [], notes: meta.notes || undefined, tg: { later: -1 } };
+  await updateDb((db) => db.push(tip));
+  log(`완성 영상을 받았습니다 ${code}: ${title}${seconds ? ` (${seconds.toFixed(1)}초)` : ""}`);
+  return tip;
+}
+
+// inbox 폴더를 살펴 새 영상을 들여옴. only로 준 파일은 다 써졌는지 기다리지 않고 바로 들여옴 (관리 화면·텔레그램으로 방금 받은 것)
+export async function scanInbox({ only = "" } = {}) {
+  for (let i = 0; only && inboxBusy && i < 100; i++) await sleep(300);      // 방금 받은 파일은 앞선 확인이 끝나기를 잠깐 기다렸다가 들여옴
+  if (inboxBusy) return [];
+  inboxBusy = true;
+  const got = [];
+  try {
+    let names = [];
+    try { names = (await fs.readdir(INBOX)).filter((n) => /\.mp4$/i.test(n)); } catch { return got; }
+    for (const name of names) {
+      const file = path.join(INBOX, name), base = name.replace(/\.mp4$/i, ""), now = name === only;
+      const size = (await fs.stat(file)).size, prev = inboxSeen.get(name);
+      const side = [".json", ".txt"].map((e) => path.join(INBOX, base + e)).find(existsSync);
+      inboxSeen.set(name, { size, first: prev?.first ?? Date.now() });
+      if (!now && (!prev || prev.size !== size)) continue;                       // 아직 쓰는 중일 수 있음 → 다음 확인 때
+      if (!now && !side && Date.now() - prev.first < 90_000) continue;           // 글 파일이 곧 따라올 수 있으니 잠시 기다림
+      inboxSeen.delete(name);
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      const move = async (dir) => {
+        await fs.mkdir(path.join(INBOX, dir), { recursive: true });
+        for (const f of [file, side].filter(Boolean)) await fs.rename(f, path.join(INBOX, dir, `${stamp}-${path.basename(f)}`)).catch(() => {});
+      };
+      try {
+        const meta = side ? readMeta(await fs.readFile(side, "utf8"), side.endsWith(".json")) : { title: /^tg-/.test(base) ? "" : base, caption: "", hashtags: "", sources: [], notes: "" };
+        got.push(await importVideo(file, meta));
+        await move("done");
+      } catch (e) {
+        await move("failed");
+        log(`완성 영상을 받지 못했습니다 (${name}): ${e.message}`);
+        tgNotify(`⚠️ 보내 주신 영상을 받지 못했습니다 (${name}): ${e.message.slice(0, 200)}`);
+        if (now) throw e;
+      }
+    }
+  } finally { inboxBusy = false; }
+  if (got.length) reviewTick();
+  return got;
+}
+// 관리 화면에서 올릴 때: 글을 먼저 저장하고(반환한 이름으로) 영상을 이어서 올림
+export async function saveInboxMeta(meta) {
+  const name = `${cleanName(meta?.title)}-${Date.now().toString(36)}`;
+  await fs.mkdir(INBOX, { recursive: true });
+  await fs.writeFile(path.join(INBOX, `${name}.json`), JSON.stringify(meta ?? {}, null, 2));
+  return { name };
+}
+export async function saveInboxFile(name, stream) {
+  const base = cleanName(name);
+  await fs.mkdir(INBOX, { recursive: true });
+  const part = path.join(INBOX, `${base}.part`);
+  let size = 0;
+  try {
+    await pipeline(stream, async function* (src) { for await (const c of src) { size += c.length; if (size > 100e6) throw new Error("영상이 너무 큽니다 (100MB 이하)"); yield c; } }, createWriteStream(part));
+    await fs.rename(part, path.join(INBOX, `${base}.mp4`));
+  } catch (e) { await fs.rm(part, { force: true }); await fs.rm(path.join(INBOX, `${base}.json`), { force: true }); throw e; }
+  const tip = (await scanInbox({ only: `${base}.mp4` })).at(-1);
+  if (!tip) throw new Error("영상을 들여오지 못했습니다. 잠시 뒤 목록을 확인해 주세요");
+  return { ok: true, shortCode: tip.shortCode };
+}
+
+// 잘못 올린 완성 영상 지우기 (아직 올라가지 않은 것만). 목록과 영상 파일을 함께 지움
+export async function deleteMade(code) {
+  const tip = (await loadDb()).find((t) => t.shortCode === code);
+  if (tip?.type !== "made") throw new Error("따로 만들어 받은 영상만 지울 수 있습니다");
+  if (["posted", "working"].includes(tip.status)) throw new Error("이미 올라갔거나 올리는 중인 영상은 지울 수 없습니다");
+  await updateDb((db) => { const i = db.findIndex((t) => t.shortCode === code); if (i >= 0) db.splice(i, 1); });
+  if (tip.video) await fs.rm(path.join(OUT, path.basename(tip.video)), { force: true });
+  log(`완성 영상을 지웠습니다 ${code}`);
+  return { ok: true };
+}
+
+// 완성해서 받은 영상의 글 고치기 (영상 자체는 여기서 못 고침)
+async function reviseMade(tip, instruction) {
+  const s = tip.script;
+  const out = await askGemini(`너는 한국 인스타그램 계정 "세바꿀(세상을 바꾸는 꿀팁)"의 편집자다. 아래는 이미 완성된 영상에 붙일 글이다. 계정 주인이 말한 [고칠 점]대로 제목, 캡션, 해시태그만 고쳐라.
+- 영상 속 화면·자막·목소리는 네가 고칠 수 없다. 고칠 점이 영상 자체를 바꿔 달라는 것뿐이면 can을 false로 답하라.
+- 말한 부분만 바꾸고 나머지는 그대로 둬라. 주인이 말하지 않은 새 사실을 지어내지 마라. 과장, 효능 단정, "내돈내산" 표현은 넣지 마라.
+
+[지금 글]
+${JSON.stringify({ title: s.hook, caption: s.caption, hashtags: s.hashtags }, null, 1)}
+
+[고칠 점]
+${instruction}
+
+JSON으로만 답하라: {"can":true,"title":"","caption":"","hashtags":""}`, { temperature: 0.3 });
+  if (out?.can === false) throw new Error("완성해서 받은 영상이라 영상 속 내용은 여기서 고칠 수 없습니다. 제목·캡션·해시태그만 고칠 수 있어요. 영상은 만든 쪽에 다시 요청해 주세요");
+  const t = (v, old) => (String(v ?? "").trim() || old);
+  const caption = t(out?.caption, s.caption);
+  await patchTip(tip.shortCode, { script: { ...s, hook: t(out?.title, s.hook).slice(0, 80), caption, hashtags: t(out?.hashtags, s.hashtags) },
+    checks: (tip.checks ?? []).filter((c) => !(caption && c.startsWith("캡션이 비어"))) });
 }
 
 export async function reviewTick() {
@@ -1661,6 +1809,18 @@ export async function startTelegram() {
       if (text.length < 4) return "고칠 점을 조금 더 자세히 적어 주세요. 예: \"2장 문장을 더 짧게\", \"표지 제목을 ○○로 바꿔\"";
       reviseAndResend(cur, text);
       return `✏️ "${cur.script.hook}"을(를) 고치는 중입니다. 1~3분 뒤에 다시 보내 드릴게요.`;
+    },
+    // 봇에게 영상을 보내면 완성 영상으로 받아 검토 대기에 넣음. 영상에 붙인 글의 첫 줄이 제목, 나머지가 캡션
+    async onVideo(v, download) {
+      if (v.size > 20e6) return `영상이 ${Math.round(v.size / 1e6)}MB입니다. 텔레그램으로는 20MB까지만 받을 수 있어요. 컴퓨터의 관리 화면에서 "완성 영상 올리기"로 올리거나 inbox 폴더에 넣어 주세요.`;
+      const name = `tg-${Date.now().toString(36)}`;
+      await fs.mkdir(INBOX, { recursive: true });
+      if (v.caption.trim()) await fs.writeFile(path.join(INBOX, `${name}.txt`), v.caption);
+      await download(path.join(INBOX, `${name}.part`));
+      await fs.rename(path.join(INBOX, `${name}.part`), path.join(INBOX, `${name}.mp4`));
+      const tip = (await scanInbox({ only: `${name}.mp4` })).at(-1);
+      if (!tip) return "영상을 받았지만 들여오는 중입니다. 잠시 뒤 검토 요청으로 보내 드릴게요.";
+      return `🎞 영상을 받았습니다: ${tip.script.hook}\n곧 검토 요청으로 다시 보내 드립니다. 승인하면 정해진 시각에 올라갑니다.${tip.script.caption ? "" : "\n(캡션이 없어요. 검토 요청이 오면 \"캡션은 ○○로 해 줘\"라고 보내 주세요.)"}`;
     },
     async skipCurrent() {
       const cur = (await loadDb()).find((t) => t.status === "pending" && t.tg?.msg && t.tg.for === t.rendered_at);

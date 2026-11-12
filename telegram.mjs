@@ -64,7 +64,7 @@ export async function tgNotify(text) {
 export async function tgSendReview(tip, remaining, revised = false) {
   const chat_id = String(state.chat_id);
   const isCard = tip.type === "card";
-  const kind = isCard ? "🗂 카드뉴스" : tip.type === "shoot" ? "🎥 직접 촬영 영상" : "🎬 꿀팁 영상";
+  const kind = isCard ? "🗂 카드뉴스" : tip.type === "shoot" ? "🎥 직접 촬영 영상" : tip.type === "made" ? "🎞 받은 완성 영상" : "🎬 꿀팁 영상";
   try {
     if (isCard && tip.images?.length) {
       const files = tip.images.slice(0, 10);
@@ -98,6 +98,7 @@ const HELP = `세바꿀 봇 사용법
 · ✅ 승인을 누르면 정해진 시각에 차례대로 인스타그램에 올라갑니다.
 · ❌ 거절을 누르면 올라가지 않습니다.
 · 고치고 싶으면 고칠 점을 그냥 글로 보내세요. 예: "2장 문장을 더 짧게", "표지 제목을 ○○로 바꿔", "3장 사진 다른 걸로". 고쳐서 다시 보내 드립니다.
+· 따로 만든 영상(mp4, 20MB까지)을 여기로 보내면 검토 대기에 넣어 드립니다. 영상에 붙인 글의 첫 줄이 제목, 나머지가 캡션이 됩니다.
 · /news — 이번 주 할인·팝업·행사 소식 카드뉴스 만들기
 · /sites — 트렌디한 사이트 추천 카드뉴스 만들기
 · /card 주제 — 그 주제로 카드뉴스 만들기 (예: /card 겨울 이불 보관법)
@@ -105,8 +106,23 @@ const HELP = `세바꿀 봇 사용법
 · /next — 지금 것은 나중에 보고 다음 것 받기
 · /help — 이 안내`;
 
+// 주인이 보낸 영상 파일을 내려받아 저장 (봇이 받을 수 있는 크기는 20MB까지)
+async function download(file_id, outFile) {
+  const f = await call("getFile", { file_id });
+  const res = await withLimit(fetch(`https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${f.file_path}`), 300_000, "파일 받기");
+  if (!res.ok) throw new Error(`텔레그램에서 파일을 받지 못했습니다 (${res.status})`);
+  await fs.writeFile(outFile, Buffer.from(await withLimit(res.arrayBuffer(), 300_000, "파일 받기")));
+}
+
 async function handle(u) {
   const m = u.message;
+  // 영상(또는 영상 파일)을 보내면 완성 영상으로 받음
+  const vid = m?.video ?? (/^video\//.test(m?.document?.mime_type ?? "") ? m.document : null);
+  if (vid) {
+    if (!state.chat_id || m.chat.id !== state.chat_id) return;
+    const answer = await cfg.onVideo({ size: vid.file_size ?? 0, caption: m.caption ?? "" }, (outFile) => download(vid.file_id, outFile)).catch((e) => `영상을 받지 못했습니다: ${e.message}`);
+    return void await call("sendMessage", { chat_id: m.chat.id, text: String(answer).slice(0, 4000) });
+  }
   if (m?.text) {
     const text = m.text.trim();
     if (!state.chat_id) {                              // 아직 주인이 없음: 연결 번호가 맞는 개인 대화만 주인으로 등록

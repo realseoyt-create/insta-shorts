@@ -123,6 +123,7 @@
   <span class="sp"></span>
   <button class="dark" onclick="cardDlg.showModal()">🗂 카드뉴스 만들기</button>
   <button class="dark" onclick="shootDlg.showModal()">🎥 촬영 기획</button>
+  <button class="dark" onclick="madeDlg.showModal()">🎞 완성 영상 올리기</button>
   <button class="dark" onclick="addDlg.showModal()">+ 소재 추가</button>
   <button class="dark" id="collectBtn" onclick="collectNow()">소재 수집</button>
   <button class="dark" id="dailyBtn" onclick="dailyNow()">수집 + 새로 만들기</button>
@@ -162,6 +163,18 @@
     <button onclick="addCard('sites')">🌐 트렌디한 사이트 추천</button>
   </div>
   <div class="meta" style="margin-top:8px">이번 주 소식은 최근 뉴스 제목에서 골라 씁니다. 할인율과 기간은 근거 기사로 꼭 확인하세요.</div>
+</dialog>
+
+<dialog id="madeDlg">
+  <h2>완성 영상 올리기</h2>
+  <div class="meta">에이전트나 다른 도구로 따로 만든 세로 영상(mp4)을 올리면, 다른 게시물과 똑같이 검토 → 승인 → 정해진 시각 발행으로 이어집니다. 영상 자체는 여기서 고치지 않고 글만 고칠 수 있습니다.</div>
+  <label>영상 파일 (mp4, 100MB 이하, 3초~3분)</label><input type="file" id="madeFile" accept="video/mp4">
+  <label>제목 (목록에 보이는 이름)</label><input id="madeTitle">
+  <label>캡션 (인스타그램에 올라갈 글)</label><textarea id="madeCaption" rows="6"></textarea>
+  <label>해시태그</label><input id="madeTags" placeholder="#세바꿀 #꿀팁">
+  <label>화면에 쓴 숫자·인용과 출처 (선택. 한 줄에 하나씩, 검토할 때 확인할 점으로 보여 줍니다)</label>
+  <textarea id="madeSources" rows="3" placeholder="전기요금 3단계는 kWh당 307.3원 — 한국전력 요금표"></textarea>
+  <div class="actions"><button class="primary" id="madeBtn" onclick="addMade()">올리기</button><button onclick="madeDlg.close()">취소</button></div>
 </dialog>
 
 <dialog id="setDlg">
@@ -225,7 +238,7 @@ async function api(method, url, body) {
 function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("on"); clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("on"), 4000); }
 const act = (fn) => async (...a) => { try { await fn(...a); await refresh(true); } catch (e) { alert(e.message); } };
 
-const kind = (t) => t.type === "card" ? "🗂 카드뉴스" : t.type === "shoot" ? "🎥 직접 촬영" : t.script ? "🎬 꿀팁 영상" : "소재";
+const kind = (t) => t.type === "card" ? "🗂 카드뉴스" : t.type === "shoot" ? "🎥 직접 촬영" : t.type === "made" ? "🎞 받은 완성 영상" : t.script ? "🎬 꿀팁 영상" : "소재";
 const title = (t) => t.script?.hook || t.ko_title || t.script?.name || t.tip_text.split("\n")[0];
 const fitBadge = (t) => t.fit == null ? "" : `${t.timely ? `<span class="badge pending">🔥 지금 시기</span> ` : ""}<span class="badge ${t.fit >= 80 ? "rec" : ""}">${t.fit >= 80 ? "⭐ 추천 " : "어울림 "}${t.fit}</span>`;
 const srcMeta = (t) => t.type || t.source === "manual" ? "" : `${t.suggest === "card" ? "카드뉴스 후보 · " : ""}${SOURCE[t.source] ?? "인스타"} · ${esc(t.owner)}${t.views ? ` · 조회 ${Number(t.views).toLocaleString()}` : ""}${t.likes ? ` · ♥ ${Number(t.likes).toLocaleString()}` : ""}`;
@@ -365,6 +378,15 @@ function videoForm(t, busy) {
       <button onclick="replan('${id}')" ${busy ? "disabled" : ""}>AI로 대본 새로 쓰기</button>
     </div>`;
 }
+// 따로 만들어 받은 완성 영상: 영상은 그대로 두고 제목과 글만 고침
+function madeForm(t) {
+  return `<div class="guide">따로 만들어 받은 영상입니다. 영상 속 화면·자막·목소리는 여기서 고칠 수 없습니다. 고치려면 새로 만들어 다시 올리고, 이 항목은 거절해 주세요.${t.notes ? `<br><b>만든 쪽의 메모:</b> ${esc(t.notes)}` : ""}</div>
+    <label>제목 (목록에 보이는 이름)</label><input value="${esc(draft.hook)}" oninput="draft.hook=this.value">
+    <label>캡션</label><textarea rows="8" oninput="draft.caption=this.value">${esc(draft.caption)}</textarea>
+    <label>해시태그</label><input value="${esc(draft.hashtags)}" oninput="draft.hashtags=this.value">
+    <div class="actions"><button class="primary" onclick="saveTextOnly('${esc(t.shortCode)}')">📝 글 저장</button>
+      ${t.status === "posted" ? "" : `<button class="danger" onclick="dropMade('${esc(t.shortCode)}')">🗑 이 영상 지우기</button>`}</div>`;
+}
 function cardForm(t, busy) {
   const id = esc(t.shortCode);
   return `<div class="guide">⚠️ 금액·기한·제도 이름·사이트 주소는 AI가 틀릴 수 있습니다. 올리기 전에 확인해 주세요.</div>
@@ -433,7 +455,7 @@ function renderDetail() {
     <h3>참고한 소재 (주제만 참고)</h3>
     ${t.ko_title ? `<div class="kosrc"><b>${esc(t.ko_title)}</b> ${fitBadge(t)}<br>${esc(t.ko_summary)}${t.why ? `<br><span class="meta">추천 이유: ${esc(t.why)}</span>` : ""}</div>` : ""}
     <details style="margin-top:8px"><summary class="meta" style="cursor:pointer">원문 보기${t.url ? ` · <a href="${esc(t.url)}" target="_blank" rel="noopener" style="color:var(--link)">원본 열기</a>` : ""}</summary><div class="src">${esc(t.tip_text)}</div></details>` : "";
-  const form = !s ? "" : t.type === "card" ? cardForm(t, busy) : t.type === "shoot" ? shootForm(t, busy) : videoForm(t, busy);
+  const form = !s ? "" : t.type === "made" ? madeForm(t) : t.type === "card" ? cardForm(t, busy) : t.type === "shoot" ? shootForm(t, busy) : videoForm(t, busy);
   const open = t.status === "shoot" || editOpen;
   $("detail").innerHTML = `
     <div class="view">
@@ -483,9 +505,27 @@ const revise = act(async (id) => {
   reviseText = ""; draftFor = null; toast("AI가 고치는 중입니다. 1~3분 뒤에 바뀐 것이 나옵니다");
 });
 const saveTextOnly = act(async (id) => {
-  const r = await api("POST", `/api/tips/${enc(id)}/text`, { caption: draft.caption, hashtags: draft.hashtags });
-  draft.caption = r.caption; draft.hashtags = r.hashtags; toast("📝 글을 저장했습니다 (영상·카드는 그대로)");
+  const r = await api("POST", `/api/tips/${enc(id)}/text`, { caption: draft.caption, hashtags: draft.hashtags, hook: draft.hook });
+  draft.caption = r.caption; draft.hashtags = r.hashtags; if (r.hook) draft.hook = r.hook; toast("📝 글을 저장했습니다 (영상·카드는 그대로)");
 });
+const dropMade = act(async (id) => { if (!confirm("이 영상을 목록에서 완전히 지울까요? 되돌릴 수 없습니다.")) return; await api("POST", `/api/tips/${enc(id)}/delete`); selId = null; draftFor = null; toast("지웠습니다"); });
+// 완성 영상 올리기: 글을 먼저 보내고, 이어서 영상 파일을 보냄
+async function addMade() {
+  const f = $("madeFile").files[0];
+  if (!f) return alert("영상 파일을 골라 주세요");
+  if (!$("madeTitle").value.trim()) return alert("제목을 적어 주세요");
+  const btn = $("madeBtn"); btn.disabled = true; btn.textContent = "올리는 중…";
+  try {
+    const sources = $("madeSources").value.split("\n").map((l) => l.trim()).filter(Boolean);
+    const { name } = await api("POST", "/api/made/meta", { title: $("madeTitle").value, caption: $("madeCaption").value, hashtags: $("madeTags").value, sources });
+    const r = await fetch(`/api/made/file/${enc(name)}`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    for (const id of ["madeFile", "madeTitle", "madeCaption", "madeTags", "madeSources"]) $(id).value = "";
+    madeDlg.close(); tab = "pending"; selId = d.shortCode; draftFor = null; await refresh(true); toast("🎞 영상을 받았습니다. 검토 대기에 넣었습니다");
+  } catch (e) { alert(e.message); }
+  btn.disabled = false; btn.textContent = "올리기";
+}
 function copyCap() {
   const s = cur()?.script; if (!s) return;
   navigator.clipboard.writeText(`${s.caption}\n\n${s.hashtags}`.trim()).then(() => toast("글을 복사했습니다"), () => alert("복사하지 못했습니다. 글을 직접 선택해서 복사해 주세요"));
