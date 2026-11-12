@@ -1,7 +1,7 @@
 // 공용 기능: 트렌드 수집 · 대본 · 음성/자막/배경 준비 · 렌더 · 업로드 · 발행 · 데이터 저장
 import "dotenv/config";
 import fs from "node:fs/promises";
-import { existsSync, createWriteStream, appendFileSync, mkdirSync } from "node:fs";
+import { existsSync, createWriteStream, appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,43 @@ export function log(...a) {
 }
 export const getLogs = () => LOGS;
 
+// ── 관리 화면에서 바꾸는 설정 (data/settings.json). .env보다 먼저 적용되고, 저장하면 서버를 다시 켜지 않아도 바로 반영됨 ──
+const SETTINGS_FILE = path.join(ROOT, "data", "settings.json");
+const TIMES = /^(([01]\d|2[0-3]):[0-5]\d)(\s*,\s*([01]\d|2[0-3]):[0-5]\d)*$/;
+const SETTING_RULES = {                                  // 항목: 값이 맞는지 확인하는 규칙
+  SCHEDULE: (v) => v === "" || TIMES.test(v), POST_TIMES: (v) => v === "" || TIMES.test(v),
+  STOCK_TARGET: (v) => /^\d{1,2}$/.test(v) && Number(v) >= 1, DAILY_CARDS: (v) => /^[0-3]$/.test(v), DAILY_NEWS: (v) => /^[01]$/.test(v), SHOOT_PLANS: (v) => /^[0-5]$/.test(v),
+  PAUSE_MAKE: (v) => /^[01]$/.test(v), PAUSE_POST: (v) => /^[01]$/.test(v),
+};
+const SECRET_SETTINGS = ["KOPIS_KEY", "TOUR_API_KEY"];   // 열쇠: 화면에는 "넣었는지"만 알려 주고 값은 돌려주지 않음
+let savedSettings = {};
+try { savedSettings = JSON.parse(readFileSync(SETTINGS_FILE, "utf8")); } catch { /* 저장한 설정 없음 */ }
+for (const [k, v] of Object.entries(savedSettings)) if (k in SETTING_RULES || SECRET_SETTINGS.includes(k)) process.env[k] = String(v);
+export const getSettings = () => ({
+  ...Object.fromEntries(Object.keys(SETTING_RULES).map((k) => [k, process.env[k] ?? ""])),
+  STOCK_TARGET: String(CONFIG.stockTarget), DAILY_CARDS: String(CONFIG.dailyCards), DAILY_NEWS: CONFIG.dailyNews > 0 ? "1" : "0", SHOOT_PLANS: String(CONFIG.shootPlans),
+  PAUSE_MAKE: process.env.PAUSE_MAKE === "1" ? "1" : "0", PAUSE_POST: process.env.PAUSE_POST === "1" ? "1" : "0",
+  keys: Object.fromEntries(SECRET_SETTINGS.map((k) => [k, has(k)])),
+});
+export async function saveSettings(patch) {
+  const next = { ...savedSettings };
+  for (const [k, raw] of Object.entries(patch ?? {})) {
+    const v = String(raw ?? "").trim();
+    if (SECRET_SETTINGS.includes(k)) { if (v) next[k] = v; continue; }           // 열쇠는 빈칸이면 그대로 둠
+    if (!(k in SETTING_RULES)) continue;
+    const clean = v.replace(/\s+/g, "");
+    if (!SETTING_RULES[k](clean)) throw new Error(`${k} 값이 맞지 않습니다: "${v}" (시각은 09:00처럼, 여러 개는 쉼표로)`);
+    next[k] = clean;
+  }
+  await fs.mkdir(path.dirname(SETTINGS_FILE), { recursive: true });
+  await fs.writeFile(SETTINGS_FILE, JSON.stringify(next, null, 2));
+  savedSettings = next;
+  for (const [k, v] of Object.entries(next)) process.env[k] = String(v);
+  log("설정을 저장했습니다");
+  return getSettings();
+}
+const num = (k, d) => { const n = Number(process.env[k] ?? d); return Number.isFinite(n) ? n : d; };
+
 // ── 수집 설정 (원하는 분야로 수정) ──
 export const CONFIG = {
   handle: process.env.IG_HANDLE ?? "@sebaggul",
@@ -47,14 +84,15 @@ export const CONFIG = {
   koreaQueries: ["생활 꿀팁", "살림 꿀팁", "몰랐던 꿀팁", "유용한 사이트", "자취 꿀팁", "돈 아끼는 꿀팁"],
   // 카드뉴스 주제 후보: 최근 게시물을 살펴볼 인스타 본보기 계정 (토큰 권한이 있을 때만 동작)
   benchmarkAccounts: (process.env.BENCHMARK_ACCOUNTS ?? "ggul_yang,lady_good_tip").split(",").map((s) => s.trim()).filter(Boolean),
-  dailyCards: Number(process.env.DAILY_CARDS ?? 1),     // 매일 자동으로 만들 카드뉴스 수 (0이면 안 만듦)
-  dailyNews: Number(process.env.DAILY_NEWS ?? 1),        // 매일 "이번 주 소식"(할인·팝업·행사) 카드뉴스를 만들지 (0이면 안 만듦)
-  stockTarget: Number(process.env.STOCK_TARGET ?? 8),   // 검토 대기 + 발행 예약이 이만큼 쌓여 있으면 자동 제작을 쉼
+  // 아래 네 가지는 관리 화면의 설정에서 바꿀 수 있어서, 쓸 때마다 지금 값을 읽음
+  get dailyCards() { return num("DAILY_CARDS", 1); },     // 매일 자동으로 만들 카드뉴스 수 (0이면 안 만듦)
+  get dailyNews() { return num("DAILY_NEWS", 1); },        // 매일 "이번 주 소식"(할인·팝업·행사) 카드뉴스를 만들지 (0이면 안 만듦)
+  get stockTarget() { return num("STOCK_TARGET", 8); },   // 검토 대기 + 발행 예약이 이만큼 쌓여 있으면 자동 제작을 쉼
   perSource: 5,          // 한 번 수집할 때 출처별로 쌓을 소재 수
   candidates: 25,        // AI가 고르기 전 조회수 상위 후보 수
   minFit: 50,            // 추천 점수(0~100)가 이보다 낮은 후보는 쌓지 않음
   affiliateNotice: process.env.AFFILIATE_NOTICE ?? "",   // 제휴 링크를 쓰면 캡션 끝에 붙일 고지 문구 (꿀템 영상)
-  shootPlans: Number(process.env.SHOOT_PLANS ?? 2),   // 촬영 대기 기획을 이 개수까지 미리 만들어 둠 (0이면 자동 기획 안 함)
+  get shootPlans() { return num("SHOOT_PLANS", 2); },   // 촬영 대기 기획을 이 개수까지 미리 만들어 둠 (0이면 자동 기획 안 함)
 };
 
 // ── 데이터: 매번 파일에서 읽고 바로 저장 ──
@@ -563,6 +601,13 @@ async function officialEvents() {
   if (out.length) log(`공식 자료 ${out.length}건 (공연 ${out.filter((x) => x.source.startsWith("KOPIS")).length}, 축제 ${out.filter((x) => x.source === "한국관광공사").length})`);
   return out;
 }
+// 관리 화면의 "열쇠 시험": 공연·축제 자료가 실제로 읽히는지 확인
+export async function testEvents() {
+  const rows = await officialEvents();
+  const shows = rows.filter((x) => x.source.startsWith("KOPIS")), fests = rows.filter((x) => x.source === "한국관광공사");
+  const line = (name, key, list) => !has(key) ? `${name}: 열쇠가 없습니다` : list.length ? `${name}: ${list.length}건 읽음 (예: ${list[0].title} · ${list[0].date})` : `${name}: 열쇠는 있지만 자료를 읽지 못했습니다. 열쇠가 맞는지, 발급 직후라면 1~2시간 뒤에 다시 시험해 보세요`;
+  return { ok: true, message: `${line("공연(KOPIS)", "KOPIS_KEY", shows)}\n${line("축제(관광공사)", "TOUR_API_KEY", fests)}` };
+}
 
 // 반환: { script, refs: 근거 기사 [{title, source, link}] } 또는 { skip, reason }
 export async function writeNews() {
@@ -616,7 +661,7 @@ export function normalizeScript(d, max = 5) {
   const hashtags = s(d.hashtags).split(/\s+/).filter((t) => !t.includes("내돈내산")).join(" ");   // 확인되지 않은 "내돈내산" 표시는 자동으로 뺌
   const alts = (Array.isArray(d?.hook_alts) ? d.hook_alts : []).map(s).filter((h) => h && h !== s(d.hook)).slice(0, 3);   // 첫 문구의 다른 후보
   return { hook: s(d.hook), sub: s(d.sub), slides, cta: s(d.cta) || "저장해두고 써먹으세요", caption: s(d.caption), hashtags,
-    ...opt({ product: s(d.product), name: s(d.name), items: s(d.items), hook_shoot: s(d.hook_shoot), cover_photo: s(d.cover_photo) }), ...(alts.length && { hook_alts: alts }) };
+    ...opt({ product: s(d.product), name: s(d.name), items: s(d.items), hook_shoot: s(d.hook_shoot), cover_photo: s(d.cover_photo), cover_shot: s(d.cover_shot) }), ...(alts.length && { hook_alts: alts }) };
 }
 
 // ── 3. 장면 준비: 음성 합성 + 자막 타이밍 + 배경 영상 ──
@@ -905,9 +950,14 @@ export function renderCards(script, name, { full = false } = {}) {
       // 표지 배경 사진: 세로 사진을 먼저 찾고, 없으면 가로 사진
       const coverKey = script.cover_photo || script.slides.find((s) => s.photo)?.photo;
       const coverContext = [script.hook, script.name].filter(Boolean).join(" — ");
-      const cover = coverKey && (await stockPhoto(coverKey, path.join(jobPublic, "cover.jpg"), used, coverContext, "vertical")
-        || await stockPhoto(coverKey, path.join(jobPublic, "cover.jpg"), used, coverContext, "horizontal"));
-      const pages = [{ kind: "cover", title: script.hook, body: script.sub, photo: cover ? `job/${jobId}/cover.jpg` : null }];
+      // 주인이 표지 사진을 직접 올렸으면 그것을 씀
+      const ownCover = script.cover_shot ? path.join(shotDir(name), path.basename(script.cover_shot)) : null;
+      const hasOwn = Boolean(ownCover && existsSync(ownCover));
+      const coverName = hasOwn ? `cover${path.extname(ownCover)}` : "cover.jpg";
+      if (hasOwn) await fs.copyFile(ownCover, path.join(jobPublic, coverName));
+      const cover = hasOwn || (coverKey && (await stockPhoto(coverKey, path.join(jobPublic, "cover.jpg"), used, coverContext, "vertical")
+        || await stockPhoto(coverKey, path.join(jobPublic, "cover.jpg"), used, coverContext, "horizontal")));
+      const pages = [{ kind: "cover", title: script.hook, body: script.sub, photo: cover ? `job/${jobId}/${coverName}` : null }];
       let photos = cover ? 1 : 0;
       for (const [i, s] of script.slides.entries()) {
         let shot = false, photo = false;
@@ -1170,8 +1220,70 @@ JSON으로만 답하라: {"sites":[{"no":1,"ok":true,"site":"","what":""}]}`, { 
   return good.length;
 }
 
+// ── 사이트 목록 관리 (관리 화면의 "사이트 목록") ──
+const hostOf = (url) => new URL(url).hostname.replace(/^www\./, "");
+// 사이트 추천에 쓸 수 있는 곳 전체. 주인이 뺀 곳은 제외
+async function sitePool() {
+  const saved = await loadSites();
+  const removed = new Set(saved.filter((x) => x.removed).map((x) => x.host));
+  const row = (tag) => (x) => ({ site: x.site, url: x.url, what: x.what, tag });
+  return [...saved.filter((x) => x.ok && x.manual).reverse().map(row("직접 추가")), ...saved.filter((x) => x.ok && !x.manual).reverse().map(row("유튜브")), ...SITE_POOL.map(row("기본"))]
+    .filter((p) => !removed.has(hostOf(p.url)));
+}
+export async function listSites() {
+  const db = await loadDb();
+  const used = new Set(db.filter((t) => t.type === "card" && ["approved", "posted"].includes(t.status)).flatMap((t) => t.script?.slides ?? []).map((s) => s.url).filter(Boolean));
+  return (await sitePool()).map((p) => ({ ...p, used: used.has(p.url) }));
+}
+// 주소만 넣어도 됨: 실제로 열리는지 확인하고, 이름과 설명이 비어 있으면 사이트의 제목·설명에서 채움
+export async function addSite({ url, site, what }) {
+  let link = String(url ?? "").trim();
+  if (link && !/^https?:\/\//i.test(link)) link = `https://${link}`;
+  link = link.replace(/^http:\/\//i, "https://").replace(/\/+$/, "");
+  if (!okUrl(link)) throw new Error("사이트 주소가 맞지 않습니다 (예: https://neal.fun)");
+  const host = hostOf(link);
+  if ((await sitePool()).some((p) => hostOf(p.url) === host)) throw new Error("이미 목록에 있는 사이트입니다");
+  let title = "", desc = "";
+  try {
+    const res = await fetch(link, { redirect: "follow", signal: AbortSignal.timeout(15_000), headers: { "Accept-Language": "ko,en" } });
+    if (res.status === 404 || res.status === 410) throw new Error("없는 페이지입니다");
+    const html = res.ok ? (await res.text()).slice(0, 150_000) : "";         // 403 같은 자동 접속 차단은 실제로 있는 사이트이므로 통과
+    const pick = (re) => (html.match(re)?.[1] ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+    title = pick(/<title[^>]*>([^<]*)<\/title>/i);
+    desc = pick(/<meta[^>]+(?:name=["']description["']|property=["']og:description["'])[^>]+content=["']([^"']*)["']/i) || pick(/<meta[^>]+content=["']([^"']*)["'][^>]+(?:name=["']description["']|property=["']og:description["'])/i);
+  } catch (e) { throw new Error(`사이트가 열리지 않습니다 (${e.message.slice(0, 60)}). 주소를 다시 확인해 주세요`); }
+  let name = String(site ?? "").trim().slice(0, 30), about = String(what ?? "").trim().slice(0, 200);
+  if (!about && (title || desc)) {
+    try {
+      const out = await askGemini(`아래는 어떤 웹사이트의 제목과 설명이다. 이 사이트에서 무엇을 할 수 있는지 한국어 한 문장으로 써라. 제목과 설명에 나온 내용만 쓰고 지어내지 마라. 알 수 없으면 what을 빈 문자열로 두어라.
+주소: ${link}\n제목: ${title}\n설명: ${desc || "(없음)"}\nJSON으로만 답하라: {"site":"사이트의 짧은 이름","what":""}`, { temperature: 0.2, fast: true, rounds: 1 });
+      about = String(out?.what ?? "").trim().slice(0, 200);
+      if (!name) name = String(out?.site ?? "").trim().slice(0, 30);
+    } catch { /* AI가 안 되면 아래에서 직접 적어 달라고 함 */ }
+  }
+  if (!name) name = title.split(/[|\-–—:·]/)[0].trim().slice(0, 30) || host;
+  if (!about) throw new Error("이 사이트가 무엇을 하는 곳인지 알아내지 못했습니다. '어떤 곳인지' 칸에 한 줄 적어 주세요");
+  const saved = (await loadSites()).filter((x) => x.host !== host);
+  const entry = { host, url: link, ok: true, manual: true, site: name, what: about, from: "직접 추가", views: 0, added_at: new Date().toISOString() };
+  await fs.mkdir(path.dirname(SITES_FILE), { recursive: true });
+  await fs.writeFile(SITES_FILE, JSON.stringify([...saved, entry], null, 2));
+  log(`사이트 목록에 추가: ${name} (${link})`);
+  return entry;
+}
+export async function removeSite(url) {
+  const host = hostOf(String(url ?? ""));
+  const saved = await loadSites();
+  const cur = saved.find((x) => x.host === host);
+  if (cur) Object.assign(cur, { ok: false, removed: true });
+  else saved.push({ host, url, ok: false, removed: true, added_at: new Date().toISOString() });
+  await fs.mkdir(path.dirname(SITES_FILE), { recursive: true });
+  await fs.writeFile(SITES_FILE, JSON.stringify(saved, null, 2));
+  log(`사이트 목록에서 뺌: ${host}`);
+  return { ok: true };
+}
+
 const SITES_TOPIC = `요즘 20~30대(MZ)가 좋아할 만한, 트렌디하고 쓸모 있는 사이트 5곳을 추천하는 카드뉴스.
-목록에서 "요즘 유튜브에서 소개됨"이라고 표시된 곳을 먼저 고려하라.
+목록에서 "주인이 직접 고른 곳"이라고 표시된 곳을 가장 먼저 넣고, 그다음 "요즘 유튜브에서 소개됨"이라고 표시된 곳을 고려하라.
 반드시 아래 [쓸 수 있는 사이트]에서만 고르고, 이름(site)과 주소(url)를 목록에 적힌 그대로 써라. 목록에 없는 사이트는 절대 쓰지 마라.
 5곳을 하나의 주제로 묶어라 (예: 심심할 때 친구랑 해 보는 재미있는 사이트, 과제·작업할 때 쓰는 사이트, 집중 안 될 때 쓰는 사이트). 표지도 그 주제로 써라.
 쓸모 있는 곳만큼 "해 보면 재미있어서 친구에게 보내고 싶은 곳"도 좋다. 각 장의 title은 12자 안쪽으로 짧게, 그 사이트에서 하게 되는 일을 한마디로 써라 (사이트 이름을 그대로 쓰지 마라).
@@ -1222,11 +1334,11 @@ async function produceCard(tip, editedScript) {
       if (tip.kind === "sites") {
         // 확인된 목록에서, 이미 올렸거나 예약한 곳을 뺀 나머지 중에서만 고르게 함
         const done = new Set(db.filter((t) => t.type === "card" && ["approved", "posted"].includes(t.status)).flatMap((t) => t.script?.slides ?? []).map((s) => s.url).filter(Boolean));
-        // 유튜브에서 찾아 둔 "요즘 뜨는 사이트"(최근 것부터) + 기본 목록
-        const hot = (await loadSites()).filter((x) => x.ok).reverse().map((x) => ({ site: x.site, url: x.url, what: x.what, hot: true }));
-        const pool = [...hot, ...SITE_POOL].filter((p) => !done.has(p.url));
-        if (pool.length < 5) throw new Error("소개할 사이트 목록이 다 떨어졌습니다. lib.mjs의 SITE_POOL에 새 사이트를 추가해 주세요");
-        script = await writeCards(`${SITES_TOPIC}${tip.topic ? `\n주인이 바라는 방향: ${tip.topic}` : ""}\n\n[쓸 수 있는 사이트]\n${pool.map((p) => `- ${p.site} | ${p.url} | ${p.what}${p.hot ? " | 요즘 유튜브에서 소개됨" : ""}`).join("\n")}`, [], { sites: true });
+        // 주인이 직접 넣은 곳 → 유튜브에서 찾아 둔 "요즘 뜨는 사이트"(최근 것부터) → 기본 목록
+        const pool = (await sitePool()).filter((p) => !done.has(p.url));
+        if (pool.length < 5) throw new Error("소개할 사이트 목록이 다 떨어졌습니다. 관리 화면의 '사이트 목록'에서 새 사이트를 추가해 주세요");
+        const mark = { "직접 추가": " | 주인이 직접 고른 곳", "유튜브": " | 요즘 유튜브에서 소개됨" };
+        script = await writeCards(`${SITES_TOPIC}${tip.topic ? `\n주인이 바라는 방향: ${tip.topic}` : ""}\n\n[쓸 수 있는 사이트]\n${pool.map((p) => `- ${p.site} | ${p.url} | ${p.what}${mark[p.tag] ?? ""}`).join("\n")}`, [], { sites: true });
         script.slides = script.slides.filter((s) => pool.some((p) => p.url === s.url));     // 목록 밖의 사이트를 썼으면 그 장은 버림
         script.slides = await keepLiveSites(script.slides);              // 주소가 실제로 열리는 곳만 남김
         if (script.slides.length < 3) throw new Error("실제로 열리는 사이트를 3곳 이상 확인하지 못했습니다. 다시 만들어 보세요");
@@ -1337,13 +1449,30 @@ export function upcomingSlots(n, from = new Date()) {          // 앞으로의 �
 }
 const slotText = (d) => `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 // 발행 순서: 시기가 중요한 "이번 주 소식"을 먼저, 그다음은 승인한 순서
+// 주인이 "맨 먼저 올리기"를 누른 것(first_at)이 있으면 그것이 가장 앞 (나중에 누른 것이 더 앞)
 const publishQueue = (db) => db.filter((t) => t.status === "approved")
-  .sort((a, b) => (b.kind === "news") - (a.kind === "news") || String(a.approved_at).localeCompare(String(b.approved_at)));
+  .sort((a, b) => String(b.first_at ?? "").localeCompare(String(a.first_at ?? "")) || (b.kind === "news") - (a.kind === "news") || String(a.approved_at).localeCompare(String(b.approved_at)));
+export async function publishFirst(code) {
+  const tip = (await loadDb()).find((t) => t.shortCode === code);
+  if (tip?.status !== "approved") throw new Error("발행 예약 상태가 아닙니다");
+  await patchTip(code, { first_at: new Date().toISOString() });
+  const slot = upcomingSlots(1)[0];
+  return { ok: true, message: slot ? `다음 발행 시각(${slotText(slot)})에 맨 먼저 올라갑니다.` : "예약 순서의 맨 앞으로 옮겼습니다." };
+}
+// 캡션과 해시태그만 고침 (영상·카드를 다시 만들지 않음)
+export async function saveText(code, { caption, hashtags }) {
+  const tip = (await loadDb()).find((t) => t.shortCode === code);
+  if (!tip?.script || !["pending", "approved"].includes(tip.status)) throw new Error("검토 대기나 발행 예약 상태에서만 글을 고칠 수 있습니다");
+  const tags = String(hashtags ?? tip.script.hashtags).split(/\s+/).filter((t) => t && !t.includes("내돈내산")).join(" ");
+  await patchTip(code, { script: { ...tip.script, caption: String(caption ?? tip.script.caption).trim(), hashtags: tags } });
+  log(`글만 고침 ${code}`);
+  return { ok: true, caption: String(caption ?? tip.script.caption).trim(), hashtags: tags };
+}
 
 export async function approveTip(code) {
   const tip = (await loadDb()).find((t) => t.shortCode === code);
   if (tip?.status !== "pending") throw new Error("검토 대기 상태가 아닙니다");
-  await patchTip(code, { status: "approved", approved_at: new Date().toISOString(), error: null, tg: null });
+  await patchTip(code, { status: "approved", approved_at: new Date().toISOString(), first_at: null, error: null, tg: null });
   const pos = publishQueue(await loadDb()).findIndex((t) => t.shortCode === code);
   const slot = upcomingSlots(pos + 1)[pos];
   log(`승인 ${code} (발행 예약 ${pos + 1}번째)`);
@@ -1352,7 +1481,7 @@ export async function approveTip(code) {
 export async function unapproveTip(code) {
   const tip = (await loadDb()).find((t) => t.shortCode === code);
   if (tip?.status !== "approved") throw new Error("발행 예약 상태가 아닙니다");
-  return patchTip(code, { status: "pending", approved_at: null, tg: null });
+  return patchTip(code, { status: "pending", approved_at: null, first_at: null, tg: null });
 }
 // 발행 시각이 되면 호출: 예약 순서의 맨 앞 하나를 올림
 export async function publishNext() {
@@ -1449,14 +1578,27 @@ ${JSON.stringify(tip.script, null, 1)}
 ${instruction}
 
 JSON으로만 답하라 (지금 대본과 같은 구조).`;
-  return normalizeScript(await askGemini(prompt, { temperature: 0.3 }), tip.type === "card" ? 7 : 5);
+  const out = normalizeScript(await askGemini(prompt, { temperature: 0.3 }), tip.type === "card" ? 7 : 5);
+  if (tip.script?.cover_shot && !out.cover_shot) out.cover_shot = tip.script.cover_shot;     // 직접 올린 표지 사진은 AI가 빠뜨려도 유지
+  return out;
 }
 
-async function reviseAndResend(tip, instruction) {
+// 관리 화면의 "말로 고치기": 텔레그램과 같은 방식으로 고쳐서 다시 만듦 (결과는 관리 화면과 봇 양쪽에 나옴)
+export async function reviseTip(code, instruction) {
+  const tip = (await loadDb()).find((t) => t.shortCode === code);
+  const text = String(instruction ?? "").trim();
+  if (tip?.status !== "pending" || !tip.script) throw new Error("검토 대기 상태에서만 말로 고칠 수 있습니다 (발행 예약이면 먼저 예약을 취소하세요)");
+  if (text.length < 2) throw new Error("고칠 점을 적어 주세요");
+  if (revising) throw new Error("다른 수정 요청을 처리하는 중입니다. 잠시 뒤에 다시 눌러 주세요");
+  reviseAndResend(tip, text.slice(0, 1000), "관리 화면");
+  return { ok: true };
+}
+
+async function reviseAndResend(tip, instruction, via = "텔레그램") {
   const code = tip.shortCode;
   revising = true;
   try {
-    log(`텔레그램 수정 요청 ${code}: ${instruction.slice(0, 80)}`);
+    log(`${via} 수정 요청 ${code}: ${instruction.slice(0, 80)}`);
     const script = await reviseScript(tip, instruction);
     await produce(code, script);                               // 고친 대본으로 다시 만들기
     const after = (await loadDb()).find((t) => t.shortCode === code);
@@ -1466,8 +1608,9 @@ async function reviseAndResend(tip, instruction) {
     }
     await patchTip(code, { tg: { later: -1, revised: true } });   // 다음 검토 요청으로 맨 먼저 다시 보냄
   } catch (e) {
-    log(`텔레그램 수정 실패 ${code}: ${e.message}`);
-    tgNotify(`⚠️ 고치지 못했습니다: ${e.message.slice(0, 300)}\n원래 것은 그대로 있습니다. 조금 다르게 말해 보시거나 PC 관리 화면에서 고쳐 주세요.`);
+    log(`${via} 수정 실패 ${code}: ${e.message}`);
+    if (via === "텔레그램") tgNotify(`⚠️ 고치지 못했습니다: ${e.message.slice(0, 300)}\n원래 것은 그대로 있습니다. 조금 다르게 말해 보시거나 PC 관리 화면에서 고쳐 주세요.`);
+    else await patchTip(code, { error: `말로 고치기 실패: ${e.message.slice(0, 300)} — 원래 것은 그대로 있습니다. 조금 다르게 적어 보세요.` }).catch(() => {});
   } finally { revising = false; reviewTick(); }
 }
 

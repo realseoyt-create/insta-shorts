@@ -7,7 +7,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
-import { ROOT, OUT, CONFIG, loadDb, updateDb, patchTip, collect, produce, runDaily, approveAndPublish, planShootItem, planCardItem, cardFromTip, refreshLinks, linksEnabled, linksUrl, approveTip, unapproveTip, publishNext, reviewTick, startTelegram, tgInfo, postTimes, upcomingSlots, saveClip, saveShot, resetTip, getLogs, log } from "./lib.mjs";
+import { ROOT, OUT, CONFIG, loadDb, updateDb, patchTip, collect, produce, runDaily, approveAndPublish, planShootItem, planCardItem, cardFromTip, refreshLinks, linksEnabled, linksUrl, approveTip, unapproveTip, publishNext, reviewTick, startTelegram, tgInfo, postTimes, upcomingSlots, saveClip, saveShot, resetTip, getLogs, log,
+  getSettings, saveSettings, testEvents, listSites, addSite, removeSite, reviseTip, saveText, publishFirst } from "./lib.mjs";
 
 // 예상하지 못한 오류가 나도 서버가 통째로 꺼지지 않게 하고, 이유를 기록에 남김
 process.on("uncaughtException", (e) => log(`예상하지 못한 오류 (서버는 계속 실행): ${e?.stack ?? e}`));
@@ -42,9 +43,18 @@ const routes = {
   "GET /api/tips": async () => (await loadDb()).slice().reverse(),
   "GET /api/logs": async () => getLogs().slice(-100),
   "POST /api/links": async () => (linksEnabled() ? bg(refreshLinks()) : Promise.reject(new Error(".env에 GITHUB_TOKEN과 GITHUB_REPO가 없습니다"))),
-  "GET /api/info": async () => ({ handle: CONFIG.handle, schedule: process.env.SCHEDULE ?? "", links: linksEnabled() ? linksUrl() : "",
+  "GET /api/info": async () => ({ handle: CONFIG.handle, schedule: makeTimes().join(", "), links: linksEnabled() ? linksUrl() : "",
     postTimes: postTimes(), slots: upcomingSlots(40).map((d) => d.toISOString()), telegram: tgInfo(),
+    pauseMake: process.env.PAUSE_MAKE === "1", pausePost: process.env.PAUSE_POST === "1",
     keys: Object.fromEntries(KEYS.map((k) => [k, Boolean(process.env[k] || (k === "PIXABAY_API_KEY" && process.env.PEXELS_API_KEY))])) }),
+  // 설정 (제작·발행 시각, 쌓아 둘 개수, 쉬기, 공연·축제 열쇠). 열쇠 값은 돌려주지 않음
+  "GET /api/settings": async () => getSettings(),
+  "POST /api/settings": async (_, body) => saveSettings(body),
+  "POST /api/settings/test": async () => testEvents(),
+  // 사이트 추천 카드에 쓸 사이트 목록
+  "GET /api/sites": async () => listSites(),
+  "POST /api/sites": async (_, body) => addSite(body),
+  "POST /api/sites/remove": async (_, body) => removeSite(body.url),
   "POST /api/collect": async () => bg(collect()),
   "POST /api/daily": async () => bg(daily()),
   "POST /api/tips": async (_, body) => {
@@ -70,6 +80,9 @@ const routes = {
   "POST /api/tips/:id/publish": async (id) => bg(approveAndPublish(id)),                           // 지금 바로 발행
   "POST /api/tips/:id/reject": async (id) => patchTip(id, { status: "rejected" }),
   "POST /api/tips/:id/reset": async (id) => resetTip(id),
+  "POST /api/tips/:id/revise": async (id, body) => reviseTip(id, body.instruction),              // 말로 고치기 (AI가 그 부분만 고쳐 다시 만듦)
+  "POST /api/tips/:id/text": async (id, body) => saveText(id, body),                             // 캡션·해시태그만 고침 (다시 만들지 않음)
+  "POST /api/tips/:id/first": async (id) => publishFirst(id),                                    // 발행 예약의 맨 앞으로
 };
 
 http.createServer(async (req, res) => {
@@ -77,6 +90,7 @@ http.createServer(async (req, res) => {
     if (!authorized(req)) { res.writeHead(401, { "WWW-Authenticate": 'Basic realm="shorts-admin", charset="UTF-8"' }); return res.end("로그인이 필요합니다"); }
     const url = new URL(req.url, "http://x");
     if (req.method === "GET" && url.pathname === "/health") return res.end("ok");
+    if (req.method === "GET" && url.pathname === "/favicon.ico") { res.writeHead(204); return res.end(); }
     if (req.method === "GET" && url.pathname === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return res.end(await fs.readFile(path.join(ROOT, "admin.html")));
@@ -118,16 +132,25 @@ http.createServer(async (req, res) => {
 //   SCHEDULE   = 새 게시물을 만드는 시각 (수집 + 제작 → 검토 대기)
 //   POST_TIMES = 승인한 게시물을 올리는 시각 (한 번에 하나씩)
 //   텔레그램 봇이 연결돼 있으면 검토할 것을 하나씩 보내 줌
-const makeTimes = (process.env.SCHEDULE ?? "").split(",").map((s) => s.trim()).filter((s) => /^\d{2}:\d{2}$/.test(s));
-if (makeTimes.length) log(`자동 제작: 매일 ${makeTimes.join(", ")}`);
-if (postTimes().length) log(`자동 발행: 매일 ${postTimes().join(", ")} (승인한 것만, 한 번에 하나씩)`);
+//   시각과 쉬기 여부는 관리 화면의 설정에서 바꿀 수 있으므로 확인할 때마다 지금 값을 읽음
+function makeTimes() { return (process.env.SCHEDULE ?? "").split(",").map((s) => s.trim()).filter((s) => /^\d{2}:\d{2}$/.test(s)); }
+if (makeTimes().length) log(`자동 제작: 매일 ${makeTimes().join(", ")}${process.env.PAUSE_MAKE === "1" ? " (지금은 쉬는 중)" : ""}`);
+if (postTimes().length) log(`자동 발행: 매일 ${postTimes().join(", ")} (승인한 것만, 한 번에 하나씩)${process.env.PAUSE_POST === "1" ? " (지금은 쉬는 중)" : ""}`);
 let lastMake = "", lastPost = "";
 setInterval(() => {
   const d = new Date();
   const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   const key = `${d.toDateString()} ${hm}`;
-  if (makeTimes.includes(hm) && key !== lastMake) { lastMake = key; log(`자동 제작 시작 (${hm})`); daily().catch((e) => log(`자동 제작 오류: ${e.message}`)); }
-  if (postTimes().includes(hm) && key !== lastPost) { lastPost = key; log(`자동 발행 시각 (${hm})`); publishNext().catch((e) => log(`자동 발행 오류: ${e.message}`)); }
+  if (makeTimes().includes(hm) && key !== lastMake) {
+    lastMake = key;
+    if (process.env.PAUSE_MAKE === "1") log(`자동 제작 시각(${hm})이지만 설정에서 쉬기로 해 두어 건너뜁니다`);
+    else { log(`자동 제작 시작 (${hm})`); daily().catch((e) => log(`자동 제작 오류: ${e.message}`)); }
+  }
+  if (postTimes().includes(hm) && key !== lastPost) {
+    lastPost = key;
+    if (process.env.PAUSE_POST === "1") log(`자동 발행 시각(${hm})이지만 설정에서 쉬기로 해 두어 건너뜁니다`);
+    else { log(`자동 발행 시각 (${hm})`); publishNext().catch((e) => log(`자동 발행 오류: ${e.message}`)); }
+  }
   reviewTick();
 }, 20_000);
 startTelegram().catch((e) => log(`텔레그램 봇을 켜지 못했습니다: ${e.message}`));

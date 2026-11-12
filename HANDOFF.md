@@ -140,6 +140,17 @@
 - **k-skill(NomaDamas/k-skill) 검토:** 에이전트(Claude Code 등)용 한국 생활 기능 모음. 자동 서버(Node + Gemini)는 스킬을 불러 쓸 수 없고, 그 프록시는 "개인적·비조직적 용도" 조건이 있어 자동 발행 서버에 연결하지 않기로 함. 작업하는 에이전트가 자료 조사·검수에 쓰는 것은 가능(공연 `kopis-performance-search`, 할인 `ohou-today-deal`·`coupang-product-search`, 가격 `danawa-price-search`, 공휴일 `korean-holiday-calendar`, 맞춤법 `korean-spell-check`, 유행어 `korean-slang-writing`). 설치는 사용자가 직접(`/plugin marketplace add NomaDamas/k-skill`).
 - **맥 대응:** 크롬 위치에 맥 경로 추가(`BROWSER`), `.env.example`에 `KOPIS_KEY`·`TOUR_API_KEY`·`BROWSER_PATH` 추가, README를 맥 이전 순서 중심으로 다시 씀. 맥에서의 실제 실행은 아직 확인하지 못함.
 
+## 6-3. 관리 화면 보강 (사용자 요청: "UI로 다 할 수 있게, 부족한 기능을 다 추가")
+
+- **말로 고치기**(`POST /api/tips/:id/revise` → `reviseTip`): 텔레그램과 같은 `reviseAndResend`를 씀. 검토 대기에서만. 실제 AI 수정까지는 화면에서 돌려 보지 않음(텔레그램 쪽 같은 함수는 확인됨).
+- **캡션·해시태그만 저장**(`/text` → `saveText`): 다시 렌더하지 않음.
+- **맨 먼저 올리기**(`/first` → `publishFirst`): `first_at`이 있는 것이 발행 순서의 맨 앞. 화면의 `queue()`도 같은 규칙.
+- **표지 사진 직접 올리기**: `script.cover_shot` (`data/shots/`의 파일 이름). 장 순서 바꾸기(↑↓), 올린 사진 빼기, 글 복사, 영상·이미지 내려받기, 목록 찾기.
+- **고친 내용 지키기**: 반영하지 않은 채 승인·발행·다른 항목 선택을 하면 물어봄(`dirty()`).
+- **설정 창**(`/api/settings`): 제작·발행 시각, 쌓아 둘 개수, 카드·소식·촬영 기획 수, 제작 쉬기·발행 쉬기, KOPIS·관광공사 열쇠와 시험. `data/settings.json`에 저장되고 `.env`보다 먼저 적용, 저장 즉시 반영(서버 재시작 불필요). 열쇠 값은 화면으로 돌려주지 않음.
+- **사이트 목록 창**(`/api/sites`): 주소만 넣으면 실제로 열어 보고 이름·설명을 채움(`addSite`), 빼기(`removeSite`). 직접 넣은 곳이 사이트 추천에서 가장 먼저 쓰임(`sitePool`). Pokemon Fusion을 시험 삼아 추가해 둠.
+- 실제 브라우저로 화면을 열어 오류가 없는 것과 각 경로의 응답을 확인함.
+
 ## 7. 알려진 문제와 한계
 
 1. **서버가 켜져 있어야만 돎.** 자동 제작·자동 발행·봇 모두 서버 프로세스 안에서 돌아가는데, 서버는 손으로 켜야 하고 PC가 꺼지면 멈춤. PC를 켤 때 자동으로 시작하는 설정이나 항상 켜진 서버 배포는 아직 안 함(사용자에게 물어봄).
