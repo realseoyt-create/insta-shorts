@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>세바꿀 관리</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
+<style>
+  /* 세바꿀 꿀 테마 */
+  :root { --ink:#1C1509; --honey:#FFB400; --link:#A86400; --bg:#FAF6EC; --card:#fff; --line:#E9E2D0; --text:#1d1a14; --muted:#766E5E; --danger:#B4232C; --ok:#1F7A3A; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Pretendard, 'Malgun Gothic', sans-serif; background:var(--bg); color:var(--text); font-size:14px; }
+  header { background:var(--ink); color:#fff; padding:10px 20px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; position:sticky; top:0; z-index:5; }
+  header h1 { font-size:17px; margin:0 8px 0 0; font-weight:700; white-space:nowrap; }
+  header .sp { flex:1; }
+  .chip { font-size:12px; padding:4px 10px; border-radius:99px; background:rgba(255,255,255,.1); color:#fff; white-space:nowrap; text-decoration:none; border:0; cursor:default; }
+  a.chip, button.chip { cursor:pointer; }
+  .chip.hot { background:var(--honey); color:var(--ink); font-weight:700; }
+  .chip.warn { background:#5A2A12; color:#FFD9A8; }
+  button { font:inherit; border:1px solid var(--line); background:#fff; color:var(--text); padding:8px 14px; border-radius:8px; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--honey); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--honey); border-color:var(--honey); color:var(--ink); font-weight:700; }
+  button.big { padding:12px 22px; font-size:16px; }
+  button.dark { background:transparent; color:#fff; border-color:rgba(255,255,255,.35); padding:6px 12px; font-size:13px; }
+  button.danger { color:var(--danger); }
+  /* 왼쪽 정렬, 넓은 화면에서도 가운데로 몰리지 않게 */
+  main { display:grid; grid-template-columns:340px minmax(0, 1fr); gap:18px; padding:16px 20px; max-width:1560px; align-items:start; }
+  @media (max-width: 1000px) { main { grid-template-columns:1fr; } }
+  aside { position:sticky; top:62px; max-height:calc(100vh - 78px); overflow:auto; padding-right:2px; }
+  @media (max-width: 1000px) { aside { position:static; max-height:none; } }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .tabs button { padding:5px 10px; font-size:13px; }
+  .tabs button.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .list { display:flex; flex-direction:column; gap:6px; }
+  .item { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; cursor:pointer; }
+  .item.sel { border-color:var(--honey); box-shadow:0 0 0 2px rgba(255,180,0,.3); }
+  .item .top { display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .item .txt { font-size:14px; font-weight:600; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .item .sub { font-size:12px; color:var(--muted); margin-top:3px; line-height:1.4; }
+  .badge { font-size:11px; font-weight:700; padding:2px 8px; border-radius:99px; background:#EEEADD; color:var(--muted); white-space:nowrap; }
+  .badge.pending { background:var(--honey); color:var(--ink); }
+  .badge.approved { background:#DDF2E3; color:var(--ok); }
+  .badge.shoot { background:#FFE9B0; color:#6B4700; }
+  .badge.working { background:#FFF3D6; color:#8A5A00; }
+  .badge.posted { background:var(--ink); color:#fff; }
+  .badge.error { background:#FCE8E9; color:var(--danger); }
+  .badge.rec { background:var(--ink); color:var(--honey); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; min-width:0; overflow-x:clip; }
+  .empty { color:var(--muted); text-align:center; padding:60px 0; }
+  /* 상세: 왼쪽 미리 보기 + 오른쪽 결정과 내용 */
+  .view { display:grid; grid-template-columns:minmax(240px, 380px) minmax(0, 1fr); gap:26px; align-items:start; }
+  @media (max-width: 1200px) { .view { grid-template-columns:1fr; } }
+  .preview { position:sticky; top:78px; }
+  @media (max-width: 1200px) { .preview { position:static; max-width:380px; } }
+  video { width:100%; border-radius:12px; background:#000; aspect-ratio:9/16; display:block; }
+  .nomedia { aspect-ratio:4/5; border-radius:12px; background:#F1ECDD; display:flex; align-items:center; justify-content:center; color:var(--muted); text-align:center; padding:20px; line-height:1.6; }
+  /* 카드뉴스: 인스타처럼 한 장씩 넘겨 보기 */
+  .viewer { position:relative; border-radius:12px; overflow:hidden; border:1px solid var(--line); background:#F1ECDD; }
+  .viewer img { width:100%; display:block; aspect-ratio:4/5; }
+  .viewer .nav { position:absolute; top:50%; transform:translateY(-50%); width:38px; height:38px; border-radius:50%; padding:0; font-size:22px; line-height:1; background:rgba(255,255,255,.92); border:0; box-shadow:0 2px 8px rgba(0,0,0,.25); }
+  .viewer .prev { left:10px; } .viewer .next { right:10px; }
+  .viewer .count { position:absolute; top:10px; right:10px; background:rgba(0,0,0,.6); color:#fff; font-size:12px; padding:3px 9px; border-radius:99px; }
+  .thumbs { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .thumbs img { width:46px; aspect-ratio:4/5; border-radius:6px; border:2px solid transparent; cursor:pointer; opacity:.65; }
+  .thumbs img.on { border-color:var(--honey); opacity:1; }
+  .kicker { font-size:12px; color:var(--muted); margin-bottom:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .kicker a { color:var(--link); }
+  h2.title { font-size:22px; line-height:1.35; margin:0 0 14px; word-break:keep-all; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:14px; background:#FFF6DC; border:1px solid #F3DFA6; border-radius:12px; margin-bottom:16px; }
+  .bar .note { font-size:13px; color:#6B4700; flex-basis:100%; line-height:1.5; }
+  .err { background:#FCE8E9; color:var(--danger); border-radius:8px; padding:10px 12px; font-size:13px; margin-bottom:12px; white-space:pre-wrap; word-break:break-word; }
+  h3 { font-size:13px; color:var(--muted); margin:18px 0 6px; font-weight:600; }
+  .cap { background:#F7F3E8; border-radius:10px; padding:14px 16px; white-space:pre-wrap; line-height:1.6; word-break:break-word; max-width:640px; }
+  .script { margin:0; padding-left:20px; line-height:1.7; max-width:640px; }
+  details.fold { margin-top:18px; border-top:1px solid var(--line); padding-top:14px; }
+  details.fold > summary { cursor:pointer; font-weight:700; font-size:15px; }
+  details.fold .form { max-width:640px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
+  input, textarea, select { width:100%; font:inherit; font-size:14px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--text); }
+  input[type=file] { padding:6px; }
+  textarea { resize:vertical; }
+  .slide { border:1px solid var(--line); border-radius:10px; padding:10px 12px 12px; margin-top:10px; position:relative; }
+  .slide .x { position:absolute; top:6px; right:6px; padding:2px 8px; font-size:12px; }
+  .src { font-size:13px; line-height:1.5; color:#444; background:#F7F3E8; border-radius:8px; padding:10px 12px; max-height:160px; overflow:auto; white-space:pre-wrap; }
+  .kosrc { background:#FFF6DC; border:1px solid #F3DFA6; border-radius:10px; padding:12px 14px; line-height:1.6; max-width:640px; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .guide { background:#FFF6DC; border:1px solid #F3DFA6; border-radius:8px; padding:10px 12px; font-size:13px; line-height:1.6; margin-top:10px; }
+  .how { line-height:1.5; background:#F7F3E8; border-radius:8px; padding:8px 10px; margin-top:6px; }
+  .shot { display:flex; justify-content:space-between; align-items:center; }
+  .ok { color:var(--ok); font-size:12px; font-weight:700; }
+  .todo { color:var(--muted); font-size:12px; }
+  .alt { font-size:12px; margin-top:6px; color:var(--muted); }
+  .alt button { padding:3px 9px; font-size:12px; margin:2px 2px 0 0; }
+  .meta { font-size:12px; color:var(--muted); line-height:1.5; }
+  details.logbox { margin:0 20px 24px; max-width:1520px; }
+  details.logbox summary { cursor:pointer; color:var(--muted); font-size:13px; padding:6px 0; }
+  .logs { font-family:Consolas, monospace; font-size:12px; background:#111820; color:#C9D4DE; border-radius:10px; padding:12px; height:200px; overflow:auto; white-space:pre-wrap; }
+  dialog { border:none; border-radius:12px; padding:20px; width:min(540px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.35); }
+  dialog h2 { font-size:17px; margin:0 0 8px; }
+  #toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); background:var(--ink); color:#fff; padding:12px 20px; border-radius:10px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s; z-index:20; max-width:90vw; }
+  #toast.on { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐝 세바꿀</h1>
+  <span id="summary" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"></span>
+  <span class="sp"></span>
+  <button class="dark" onclick="cardDlg.showModal()">🗂 카드뉴스 만들기</button>
+  <button class="dark" onclick="shootDlg.showModal()">🎥 촬영 기획</button>
+  <button class="dark" onclick="addDlg.showModal()">+ 소재 추가</button>
+  <button class="dark" id="collectBtn" onclick="collectNow()">소재 수집</button>
+  <button class="dark" id="dailyBtn" onclick="dailyNow()">수집 + 새로 만들기</button>
+</header>
+
+<main>
+  <aside>
+    <div class="tabs" id="tabs"></div>
+    <div class="list" id="list"></div>
+  </aside>
+  <section class="panel" id="detail"><div class="empty">왼쪽에서 항목을 선택하세요</div></section>
+</main>
+<details class="logbox"><summary>작업 기록 보기</summary><div class="logs" id="logs"></div></details>
+<div id="toast"></div>
+
+<dialog id="addDlg">
+  <h2>소재 직접 추가</h2>
+  <label>주제 또는 참고한 게시물 내용 (예: 운동화 냄새 없애는 법)</label>
+  <textarea id="addText" rows="6"></textarea>
+  <label>원본 링크 (선택)</label>
+  <input id="addUrl">
+  <div class="actions"><button class="primary" onclick="addTip()">추가</button><button onclick="addDlg.close()">취소</button></div>
+</dialog>
+
+<dialog id="cardDlg">
+  <h2>카드뉴스 만들기</h2>
+  <div class="meta">넘겨 보는 게시물입니다. 표지 + 내용 5~7장 + 마무리 장이 만들어지고, 장마다 내용에 맞는 사진이 들어갑니다.</div>
+  <label>주제 (비워 두면 AI가 사진으로 보여 주기 좋은 주제를 고릅니다)</label>
+  <textarea id="cardTopic" rows="4" placeholder="예: 냉장고에 넣으면 안 되는 식재료&#10;예: 겨울 이불 보관법"></textarea>
+  <div class="actions"><button class="primary" onclick="addCard()">이 주제로 만들기</button><button onclick="cardDlg.close()">취소</button></div>
+  <h3>바로 만들기</h3>
+  <div class="actions" style="margin-top:0">
+    <button onclick="addCard('news')">📰 이번 주 소식 (할인·팝업·행사)</button>
+    <button onclick="addCard('sites')">🌐 트렌디한 사이트 추천</button>
+  </div>
+  <div class="meta" style="margin-top:8px">이번 주 소식은 최근 뉴스 제목에서 골라 씁니다. 할인율과 기간은 근거 기사로 꼭 확인하세요.</div>
+</dialog>
+
+<dialog id="shootDlg">
+  <h2>촬영 기획 만들기</h2>
+  <div class="meta">직접 찍어 올리는 영상입니다. AI가 장면별로 무엇을 찍을지 정해 주고, 찍은 영상을 올리면 음성·자막·편집은 자동으로 됩니다.</div>
+  <label>형식</label>
+  <select id="shootFormat">
+    <option value="items">꿀템 N가지 — 써 본 물건 여러 개를 하나씩 소개</option>
+    <option value="verify">꿀팁 검증 — 도는 꿀팁을 직접 해 보기</option>
+    <option value="product">살까 말까 — 물건 하나를 직접 써 보기</option>
+    <option value="auto">알아서 골라 줘</option>
+  </select>
+  <label>꿀템 형식: 물건을 한 줄에 하나씩 (2~5개). " - " 뒤에 실제로 써 본 느낌을 적으면 그 내용만 사실로 씁니다.<br>다른 형식: 주제나 물건. 비워 두면 AI가 고릅니다.</label>
+  <textarea id="shootTopic" rows="6" placeholder="여행템&#10;순면 페이스 타올 - 호텔 수건이 찝찝해서 챙겨 다님&#10;쿠션 테이프 - 새 신발 신을 때 뒤꿈치에 붙이면 안 까짐"></textarea>
+  <div class="actions"><button class="primary" onclick="addShoot()">기획 만들기</button><button onclick="shootDlg.close()">취소</button></div>
+</dialog>
+
+<script>
+const STATUS = { pending: "검토 대기", approved: "발행 예약", shoot: "촬영 대기", new: "새 소재", working: "작업 중", posted: "발행됨", rejected: "거절", skipped: "건너뜀", error: "오류" };
+const TABS = ["pending", "approved", "shoot", "new", "working", "posted", "rejected", "skipped", "error", "all"];
+const SOURCE = { youtube: "유튜브(해외)", youtube_kr: "유튜브(한국)", instagram: "인스타", manual: "직접 입력" };
+let tips = [], info = {}, tab = "pending", selId = null, draft = null, draftFor = null, viewIdx = 0, editOpen = false;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const enc = encodeURIComponent;
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || r.status);
+  return d;
+}
+function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("on"); clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("on"), 4000); }
+const act = (fn) => async (...a) => { try { await fn(...a); await refresh(true); } catch (e) { alert(e.message); } };
+
+const kind = (t) => t.type === "card" ? "🗂 카드뉴스" : t.type === "shoot" ? "🎥 직접 촬영" : t.script ? "🎬 꿀팁 영상" : "소재";
+const title = (t) => t.script?.hook || t.ko_title || t.script?.name || t.tip_text.split("\n")[0];
+const fitBadge = (t) => t.fit == null ? "" : `${t.timely ? `<span class="badge pending">🔥 지금 시기</span> ` : ""}<span class="badge ${t.fit >= 80 ? "rec" : ""}">${t.fit >= 80 ? "⭐ 추천 " : "어울림 "}${t.fit}</span>`;
+const srcMeta = (t) => t.type || t.source === "manual" ? "" : `${t.suggest === "card" ? "카드뉴스 후보 · " : ""}${SOURCE[t.source] ?? "인스타"} · ${esc(t.owner)}${t.views ? ` · 조회 ${Number(t.views).toLocaleString()}` : ""}${t.likes ? ` · ♥ ${Number(t.likes).toLocaleString()}` : ""}`;
+const when = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+// 발행 예약: 승인한 순서대로 다가오는 발행 시각에 하나씩
+const queue = () => tips.filter((t) => t.status === "approved").sort((a, b) => String(a.approved_at).localeCompare(String(b.approved_at)));
+const slotOf = (t) => { const i = queue().findIndex((x) => x.shortCode === t.shortCode); return i >= 0 && info.slots?.[i] ? `${when(info.slots[i])} 발행 예정 (${i + 1}번째)` : "발행 시각 미정"; };
+
+function rowsOf(k) {
+  const rows = tips.filter((t) => k === "all" || t.status === k);
+  if (k === "approved") return queue();
+  if (k === "pending") return rows.slice().reverse();                              // 먼저 만든 것부터 검토
+  const rank = (t) => (t.source === "manual" ? 101 : t.fit ?? -1);
+  if (k === "new") rows.sort((a, b) => rank(b) - rank(a) || (b.score || 0) - (a.score || 0));   // 추천 순
+  return rows;
+}
+function renderSummary() {
+  const n = (k) => tips.filter((t) => t.status === k).length;
+  const tg = info.telegram || {};
+  const miss = Object.entries(info.keys || {}).filter(([k, v]) => !v && k !== "APIFY_TOKEN").map(([k]) => k);
+  $("summary").innerHTML = [
+    `<button class="chip ${n("pending") ? "hot" : ""}" onclick="tab='pending';selId=null;renderAll()">검토 대기 ${n("pending")}</button>`,
+    `<button class="chip" onclick="tab='approved';selId=null;renderAll()">발행 예약 ${n("approved")}</button>`,
+    info.postTimes?.length ? `<span class="chip">자동 발행 매일 ${esc(info.postTimes.join(", "))}</span>` : `<span class="chip warn">자동 발행 꺼짐</span>`,
+    info.schedule ? `<span class="chip">자동 제작 매일 ${esc(info.schedule)}</span>` : `<span class="chip warn">자동 제작 꺼짐</span>`,
+    !tg.enabled ? `<span class="chip warn">텔레그램 봇 없음</span>` : tg.paired ? `<span class="chip">봇 @${esc(tg.bot)} 연결됨</span>`
+      : `<a class="chip hot" href="${esc(tg.link)}" target="_blank" rel="noopener">봇 연결하기 → 휴대폰에서 열고 "시작"</a>`,
+    info.links ? `<a class="chip" href="${esc(info.links)}" target="_blank" rel="noopener">링크 페이지</a>` : "",
+    miss.length ? `<span class="chip warn">미설정: ${esc(miss.join(", "))}</span>` : "",
+  ].join("");
+}
+function renderTabs() {
+  $("tabs").innerHTML = TABS.map((k) => {
+    const c = k === "all" ? tips.length : tips.filter((t) => t.status === k).length;
+    return c || ["pending", "approved"].includes(k) || k === tab ? `<button class="${k === tab ? "on" : ""}" onclick="tab='${k}';selId=null;renderAll()">${k === "all" ? "전체" : STATUS[k]} ${c}</button>` : "";
+  }).join("");
+}
+function renderList() {
+  const rows = rowsOf(tab);
+  if (!selId || !rows.some((t) => t.shortCode === selId)) selId = rows[0]?.shortCode ?? null;
+  $("list").innerHTML = rows.length ? rows.map((t) => `
+    <div class="item ${t.shortCode === selId ? "sel" : ""}" onclick="select('${esc(t.shortCode)}')">
+      <div class="top"><span>${kind(t)}</span><span>${t.status === "new" ? fitBadge(t) : ""} ${tab === "all" ? `<span class="badge ${t.status}">${STATUS[t.status] ?? t.status}</span>` : ""}</span></div>
+      <div class="txt">${esc(title(t))}</div>
+      ${t.status === "approved" ? `<div class="sub">${esc(slotOf(t))}</div>` : t.status === "new" && t.why ? `<div class="sub">${esc(t.why)}</div>` : t.status === "posted" && t.posted_at ? `<div class="sub">${when(t.posted_at)} 발행</div>` : ""}
+    </div>`).join("") : `<div class="empty">항목이 없습니다</div>`;
+}
+
+// ── 상세 ──
+function previewHtml(t, busy) {
+  if (t.type === "card" && t.images?.length) {
+    viewIdx = Math.min(viewIdx, t.images.length - 1);
+    return `<div class="viewer">
+        <img id="cardImg" src="/img/${enc(t.images[viewIdx])}">
+        <button class="nav prev" onclick="flip(-1)" aria-label="이전 장">‹</button><button class="nav next" onclick="flip(1)" aria-label="다음 장">›</button>
+        <div class="count" id="cardCount">${viewIdx + 1} / ${t.images.length}</div>
+      </div>
+      <div class="thumbs" id="thumbs">${t.images.map((f, i) => `<img src="/img/${enc(f)}" class="${i === viewIdx ? "on" : ""}" onclick="flip(${i} - viewIdx)" loading="lazy">`).join("")}</div>`;
+  }
+  if (t.video) return `<video src="/video/${enc(t.video)}" controls playsinline></video>`;
+  return `<div class="nomedia">${busy ? "만드는 중…<br>1~3분 걸립니다" : t.type === "shoot" ? "장면 영상을 모두 올리고<br>'영상 만들기'를 누르세요" : "아직 만든 것이 없습니다"}</div>`;
+}
+function flip(step) {
+  const t = tips.find((x) => x.shortCode === selId);
+  if (!t?.images?.length) return;
+  viewIdx = (viewIdx + step + t.images.length) % t.images.length;
+  $("cardImg").src = `/img/${enc(t.images[viewIdx])}`;
+  $("cardCount").textContent = `${viewIdx + 1} / ${t.images.length}`;
+  [...$("thumbs").children].forEach((el, i) => el.classList.toggle("on", i === viewIdx));
+}
+document.addEventListener("keydown", (e) => {
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
+  if (e.key === "ArrowLeft") flip(-1); else if (e.key === "ArrowRight") flip(1);
+});
+
+// 맨 위의 결정 영역: 상태에 따라 할 수 있는 일만 보여 줌
+function barHtml(t, busy) {
+  const id = esc(t.shortCode);
+  if (busy) return `<div class="bar"><b>만드는 중입니다…</b><span class="note">끝나면 검토 대기로 넘어옵니다.</span></div>`;
+  if (t.status === "pending") return `<div class="bar">
+      <button class="primary big" onclick="approve('${id}')">✅ 승인</button>
+      <button class="big danger" onclick="reject('${id}')">❌ 거절</button>
+      <button onclick="publishNow('${id}')">⚡ 지금 바로 올리기</button>
+      <span class="note">승인하면 ${info.postTimes?.length ? `매일 ${esc(info.postTimes.join(", "))}에 차례대로` : "발행 시각이 정해지면"} 자동으로 올라갑니다. 숫자·날짜·주소가 맞는지 먼저 봐 주세요.</span></div>`;
+  if (t.status === "approved") return `<div class="bar"><b>✅ 승인됨 · ${esc(slotOf(t))}</b>
+      <button onclick="publishNow('${id}')">⚡ 지금 바로 올리기</button><button onclick="unapprove('${id}')">↩ 예약 취소</button></div>`;
+  if (t.status === "posted") return `<div class="bar"><b>발행됨</b> ${t.posted_at ? when(t.posted_at) : ""} ${t.permalink ? `<a href="${esc(t.permalink)}" target="_blank" rel="noopener">인스타그램에서 보기</a>` : ""}</div>`;
+  if (t.status === "new") return `<div class="bar">
+      <button class="primary" onclick="generate('${id}')">🎬 영상으로 만들기</button>
+      <button class="${t.suggest === "card" ? "primary" : ""}" onclick="toCard('${id}')">🗂 카드뉴스로 만들기</button>
+      <button class="danger" onclick="reject('${id}')">쓰지 않기</button>
+      <span class="note">주제만 참고하고 내용은 새로 씁니다.</span></div>`;
+  if (t.status === "shoot") return "";
+  return `<div class="bar"><b>${STATUS[t.status]}</b><button onclick="reset('${id}')">되돌리기</button></div>`;
+}
+const hookAlts = () => (draft.hook_alts?.length ? `<div class="alt">다른 후보 (누르면 바뀝니다): ${draft.hook_alts.map((h, i) => `<button onclick="swapHook(${i})">${esc(h)}</button>`).join(" ")}</div>` : "");
+function swapHook(i) { [draft.hook, draft.hook_alts[i]] = [draft.hook_alts[i], draft.hook]; renderDetail(); }
+const tail = () => `
+  <label>마지막 문구</label><input value="${esc(draft.cta)}" oninput="draft.cta=this.value">
+  <label>캡션</label><textarea rows="6" oninput="draft.caption=this.value">${esc(draft.caption)}</textarea>
+  <label>해시태그</label><input value="${esc(draft.hashtags)}" oninput="draft.hashtags=this.value">`;
+
+function videoForm(t, busy) {
+  const id = esc(t.shortCode);
+  return `<label>첫 화면 문구 — 여기서 넘길지 말지가 정해집니다</label><input value="${esc(draft.hook)}" oninput="draft.hook=this.value">${hookAlts()}
+    ${draft.slides.map((s, i) => `
+      <div class="slide">
+        <button class="x" onclick="draft.slides.splice(${i},1);renderDetail()" ${draft.slides.length <= 1 ? "disabled" : ""}>삭제</button>
+        <label style="margin-top:0">${i + 1}장 제목</label><input value="${esc(s.title)}" oninput="draft.slides[${i}].title=this.value">
+        <label>${i + 1}장 읽어줄 문장 (음성 + 자막)</label><textarea rows="2" oninput="draft.slides[${i}].body=this.value">${esc(s.body)}</textarea>
+        <label>${i + 1}장 배경 영상 검색어 (영어, 쉼표로 여러 개)</label><input value="${esc(s.keyword)}" oninput="draft.slides[${i}].keyword=this.value">
+      </div>`).join("")}
+    <button style="margin-top:8px" onclick="draft.slides.push({title:'',body:'',keyword:''});renderDetail()" ${draft.slides.length >= 5 ? "disabled" : ""}>+ 장 추가</button>
+    ${tail()}
+    <div class="actions">
+      <button class="primary" onclick="rerender('${id}')" ${busy ? "disabled" : ""}>고친 내용으로 다시 만들기</button>
+      <button onclick="replan('${id}')" ${busy ? "disabled" : ""}>AI로 대본 새로 쓰기</button>
+    </div>`;
+}
+function cardForm(t, busy) {
+  const id = esc(t.shortCode);
+  return `<div class="guide">⚠️ 금액·기한·제도 이름·사이트 주소는 AI가 틀릴 수 있습니다. 올리기 전에 확인해 주세요.</div>
+    <label>표지 제목 — 여기서 넘길지 말지가 정해집니다</label><input value="${esc(draft.hook)}" oninput="draft.hook=this.value">${hookAlts()}
+    <label>표지 아래 한 줄</label><input value="${esc(draft.sub)}" oninput="draft.sub=this.value">
+    <label>표지 배경 사진 검색어 (영어, 쉼표로 여러 개)</label><input value="${esc(draft.cover_photo || "")}" oninput="draft.cover_photo=this.value">
+    ${draft.slides.map((s, i) => `
+      <div class="slide">
+        <button class="x" onclick="draft.slides.splice(${i},1);renderDetail()" ${draft.slides.length <= 3 ? "disabled" : ""}>삭제</button>
+        <label style="margin-top:0">${i + 1}장 제목</label><input value="${esc(s.title)}" oninput="draft.slides[${i}].title=this.value">
+        <label>${i + 1}장 내용</label><textarea rows="3" oninput="draft.slides[${i}].body=this.value">${esc(s.body)}</textarea>
+        <label>사진 검색어 (영어, 쉼표로 여러 개. 예: potato, vegetables)</label><input value="${esc(s.photo || "")}" oninput="draft.slides[${i}].photo=this.value">
+        <label>사이트 주소 (적으면 사진 대신 그 사이트 화면이 들어갑니다)</label><input value="${esc(s.url || "")}" placeholder="https://" oninput="draft.slides[${i}].url=this.value">
+        <label>${s.shot ? `<span class="ok">✓ 직접 올린 사진을 씁니다</span> — 바꾸려면 다시 올리세요` : "마음에 드는 사진이 따로 있으면 직접 올리세요"}</label>
+        <input type="file" accept="image/*" onchange="uploadShot('${id}', ${i}, this)" ${busy ? "disabled" : ""}>
+      </div>`).join("")}
+    <button style="margin-top:8px" onclick="draft.slides.push({title:'',body:'',keyword:''});renderDetail()" ${draft.slides.length >= 7 ? "disabled" : ""}>+ 장 추가</button>
+    ${tail()}
+    <div class="actions">
+      <button class="primary" onclick="rerender('${id}')" ${busy ? "disabled" : ""}>고친 내용으로 다시 만들기</button>
+      <button onclick="replan('${id}')" ${busy ? "disabled" : ""}>AI로 새로 쓰기</button>
+    </div>`;
+}
+// 직접 촬영: 장면별로 "찍을 것"을 보여 주고 영상을 올려 받음
+function shootForm(t, busy) {
+  const id = esc(t.shortCode), clips = t.clips || {};
+  const numbers = [0, ...draft.slides.map((_, i) => i + 1)];
+  const ready = numbers.every((n) => clips[n]);
+  const scene = (n, name, shoot, field) => `
+    <div class="slide">
+      <div class="shot"><b>${name}</b>${clips[n] ? `<span class="ok">✓ 올림 (${(clips[n].size / 1e6).toFixed(1)}MB)</span>` : `<span class="todo">아직 안 찍음</span>`}</div>
+      <div class="how">🎥 ${esc(shoot)}</div>
+      ${field}
+      <label>${clips[n] ? "다시 찍었으면 새 영상 올리기" : "찍은 영상 올리기"}</label>
+      <input type="file" accept="video/*" onchange="uploadClip('${id}', ${n}, this)" ${busy ? "disabled" : ""}>
+    </div>`;
+  return `${draft.items ? `<div class="meta">준비물: <b>${esc(draft.items)}</b></div>` : ""}
+    <div class="guide"><b>찍는 법</b> — 휴대폰을 세로로 들고, 밝은 곳에서, 손과 물건만 나오게 찍습니다. 한 장면에 5~8초면 충분하고 말은 안 해도 됩니다.</div>
+    ${scene(0, "첫 화면", draft.hook_shoot, `<label>첫 화면 문구</label><input value="${esc(draft.hook)}" oninput="draft.hook=this.value">`)}
+    ${draft.slides.map((s, i) => scene(i + 1, `${i + 1}번 장면 · ${esc(s.title)}`, s.shoot, `
+      <label>읽어줄 문장 (음성 + 자막)</label><textarea rows="2" oninput="draft.slides[${i}].body=this.value">${esc(s.body)}</textarea>
+      ${s.alt ? `<div class="alt">결과가 기대만 못했다면 → <button onclick="swapAlt(${i})">이 문장으로 바꾸기</button> "${esc(s.alt)}"</div>` : ""}`)).join("")}
+    <div class="guide">⚠️ 문장은 해 보기 전에 AI가 쓴 초안입니다. <b>실제 결과와 다르면 꼭 고쳐 주세요.</b></div>
+    ${tail()}
+    <div class="actions">
+      <button class="primary" onclick="rerender('${id}')" ${busy || !ready ? "disabled" : ""}>${t.video ? "고친 내용으로 영상 다시 만들기" : "영상 만들기"}</button>
+      <button onclick="replan('${id}')" ${busy ? "disabled" : ""}>AI로 기획 다시 쓰기</button>
+      ${t.status === "shoot" ? `<button class="danger" onclick="reject('${id}')">쓰지 않기</button>` : ""}
+    </div>
+    ${ready ? "" : `<div class="meta" style="margin-top:8px">장면 ${numbers.length}개의 영상을 모두 올리면 '영상 만들기'가 켜집니다.</div>`}`;
+}
+function swapAlt(i) { const s = draft.slides[i]; [s.body, s.alt] = [s.alt, s.body]; renderDetail(); }
+
+function renderDetail() {
+  const t = tips.find((x) => x.shortCode === selId);
+  if (!t) { $("detail").innerHTML = `<div class="empty">${tab === "pending" ? "검토할 것이 없습니다 🎉" : "왼쪽에서 항목을 선택하세요"}</div>`; return; }
+  const key = t.shortCode + (t.rendered_at || "") + (t.planned_at || "");
+  if (draftFor !== key) { draft = structuredClone(t.script || {}); draftFor = key; }
+  const busy = t.status === "working";
+  const s = t.script;
+  const source = !t.type && t.source !== "manual" || (!t.type && !s) ? `
+    <h3>참고한 소재 (주제만 참고)</h3>
+    ${t.ko_title ? `<div class="kosrc"><b>${esc(t.ko_title)}</b> ${fitBadge(t)}<br>${esc(t.ko_summary)}${t.why ? `<br><span class="meta">추천 이유: ${esc(t.why)}</span>` : ""}</div>` : ""}
+    <details style="margin-top:8px"><summary class="meta" style="cursor:pointer">원문 보기${t.url ? ` · <a href="${esc(t.url)}" target="_blank" rel="noopener" style="color:var(--link)">원본 열기</a>` : ""}</summary><div class="src">${esc(t.tip_text)}</div></details>` : "";
+  const form = !s ? "" : t.type === "card" ? cardForm(t, busy) : t.type === "shoot" ? shootForm(t, busy) : videoForm(t, busy);
+  const open = t.status === "shoot" || editOpen;
+  $("detail").innerHTML = `
+    <div class="view">
+      <div class="preview">${previewHtml(t, busy)}</div>
+      <div>
+        <div class="kicker">${kind(t)} <span class="badge ${t.status}">${STATUS[t.status] ?? t.status}</span> ${esc(srcMeta(t))}${s?.product ? ` · 관련 물건: ${esc(s.product)}` : ""}</div>
+        <h2 class="title">${esc(title(t))}</h2>
+        ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
+        ${barHtml(t, busy)}
+        ${t.checks?.length && ["pending", "approved"].includes(t.status) ? `<div class="guide" style="margin:0 0 12px"><b>⚠️ AI 검수가 직접 확인해 달라고 한 점</b><br>${t.checks.map((c) => `· ${esc(c)}`).join("<br>")}</div>` : ""}
+        ${t.fixed?.length && ["pending", "approved"].includes(t.status) ? `<div class="guide" style="margin:0 0 12px"><b>🔧 AI 검수가 스스로 고친 곳</b> (맞게 고쳤는지 봐 주세요)<br>${t.fixed.map((c) => `· ${esc(c)}`).join("<br>")}</div>` : ""}
+        ${t.refs?.length ? `<h3>근거 기사 (눌러서 내용이 맞는지 확인)</h3><ol class="script">${t.refs.map((r) => `<li>${r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener" style="color:var(--link)">${esc(r.title)}</a>` : esc(r.title)} <span class="meta">${esc(r.source)} · ${esc(r.date)}${r.official ? " · 공식 자료" : ""}</span></li>`).join("")}</ol>` : ""}
+        ${s && !t.type && s.slides ? `<h3>영상에서 읽어 주는 내용</h3><ol class="script">${s.slides.map((x) => `<li><b>${esc(x.title)}</b> — ${esc(x.body)}</li>`).join("")}</ol>` : ""}
+        ${s && t.status !== "shoot" ? `<h3>인스타그램에 올라갈 글</h3><div class="cap">${esc(`${s.caption}\n\n${s.hashtags}`.trim())}</div>` : ""}
+        ${source}
+        ${form ? (t.status === "shoot" ? `<h3>촬영하고 올리기</h3><div class="form" style="max-width:640px">${form}</div>`
+          : `<details class="fold" ${open ? "open" : ""} ontoggle="editOpen=this.open"><summary>✏️ 내용 고치기</summary><div class="form">${form}</div></details>`) : ""}
+      </div>
+    </div>`;
+}
+function renderAll() { renderSummary(); renderTabs(); renderList(); renderDetail(); }
+function select(id) { if (selId !== id) { viewIdx = 0; editOpen = false; } selId = id; renderList(); renderDetail(); }
+
+// ── 동작 ──
+const collectNow = act(async () => { await api("POST", "/api/collect"); toast("소재를 모으는 중입니다"); });
+const dailyNow = act(async () => { await api("POST", "/api/daily"); toast("수집하고 새 게시물을 만드는 중입니다. 몇 분 걸립니다"); });
+const approve = act(async (id) => { const r = await api("POST", `/api/tips/${enc(id)}/approve`); toast(`✅ 승인했습니다. ${r.message}`); selId = null; viewIdx = 0; });
+const unapprove = act(async (id) => { await api("POST", `/api/tips/${enc(id)}/unapprove`); toast("예약을 취소하고 검토 대기로 되돌렸습니다"); });
+const publishNow = act(async (id) => {
+  if (!confirm("지금 바로 인스타그램에 올릴까요?\n(고친 내용이 있다면 먼저 '다시 만들기'를 눌러 반영하세요)")) return;
+  await api("POST", `/api/tips/${enc(id)}/publish`); toast("올리는 중입니다. 1~3분 걸립니다");
+});
+const reject = act(async (id) => { await api("POST", `/api/tips/${enc(id)}/reject`); selId = null; viewIdx = 0; });
+const reset = act((id) => api("POST", `/api/tips/${enc(id)}/reset`));
+const generate = act(async (id) => { await api("POST", `/api/tips/${enc(id)}/generate`); toast("만드는 중입니다. 끝나면 검토 대기로 넘어옵니다"); });
+const replan = act(async (id) => { if (confirm("AI가 새로 쓰면 지금 내용이 바뀝니다. 계속할까요?")) await api("POST", `/api/tips/${enc(id)}/generate`); });
+const rerender = act(async (id) => { await api("POST", `/api/tips/${enc(id)}/render`, { script: draft }); toast("다시 만드는 중입니다"); });
+const toCard = act(async (id) => { await api("POST", `/api/tips/${enc(id)}/card`); toast("카드뉴스로 만드는 중입니다"); });
+const addTip = act(async () => { const t = await api("POST", "/api/tips", { tip_text: $("addText").value, url: $("addUrl").value }); $("addText").value = ""; $("addUrl").value = ""; addDlg.close(); tab = "new"; selId = t.shortCode; });
+const addCard = act(async (kind) => { await api("POST", "/api/cards", { topic: kind === "news" ? "" : $("cardTopic").value, kind: kind || "" }); $("cardTopic").value = ""; cardDlg.close(); toast("카드뉴스를 만드는 중입니다. 2~3분 걸립니다"); });
+const addShoot = act(async () => { await api("POST", "/api/shoots", { topic: $("shootTopic").value, format: $("shootFormat").value }); $("shootTopic").value = ""; shootDlg.close(); toast("촬영 기획을 쓰는 중입니다"); });
+async function sendFile(url, input, done) {
+  const f = input.files[0];
+  if (!f) return;
+  input.disabled = true; toast("올리는 중…");
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": enc(f.name) }, body: f });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    await done(d);
+  } catch (e) { alert(e.message); }
+}
+const uploadClip = (id, n, input) => sendFile(`/api/tips/${enc(id)}/clip/${n}`, input, async () => { await refresh(true); toast("영상을 올렸습니다"); });
+const uploadShot = (id, i, input) => sendFile(`/api/tips/${enc(id)}/shot`, input, (d) => { draft.slides[i].shot = d.file; renderDetail(); toast("사진을 올렸습니다. '고친 내용으로 다시 만들기'를 누르면 들어갑니다"); });
+
+async function refresh(force) {
+  const [newTips, logs] = await Promise.all([api("GET", "/api/tips"), api("GET", "/api/logs")]);
+  const changed = JSON.stringify(newTips) !== JSON.stringify(tips);
+  tips = newTips;
+  if (changed || force) {
+    const active = document.activeElement;
+    const editing = active && ["INPUT", "TEXTAREA"].includes(active.tagName) && $("detail").contains(active);
+    renderSummary(); renderTabs(); renderList();
+    if (!editing || force) renderDetail();
+  }
+  const box = $("logs"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 5;
+  box.textContent = logs.join("\n");
+  if (atEnd) box.scrollTop = box.scrollHeight;
+}
+async function loadInfo() { try { info = await api("GET", "/api/info"); renderSummary(); renderList(); } catch {} }
+loadInfo().then(() => refresh(true));
+setInterval(() => refresh().catch(() => {}), 3000);
+setInterval(loadInfo, 15000);
+</script>
+</body>
+</html>

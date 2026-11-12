@@ -1,0 +1,10 @@
+node_modules
+out
+data
+assets
+logs
+.env
+.env.*
+!.env.example
+.DS_Store
+*.zip
