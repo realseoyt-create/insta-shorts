@@ -535,10 +535,13 @@ function withSites(caption, slides) {
 // 프로필 링크 페이지 새로 만들기: 발행한 게시물 중 사이트를 소개한 것을 최신순으로 실음
 export async function refreshLinks() {
   if (!linksEnabled()) return null;
-  const posts = (await loadDb()).filter((t) => t.status === "posted" && t.script?.slides?.some((s) => okUrl(s.url)))
+  // 사이트를 소개한 게시물은 그 사이트로, 소식 게시물은 근거 기사 원문으로 가는 단추를 만듦
+  const newsLinks = (t) => (t.refs ?? []).map((r, i) => ({ r, s: t.refs.length === t.script.slides.length ? t.script.slides[i] : null })).filter(({ r }) => okUrl(r.link))
+    .map(({ r, s }) => ({ name: `${(s?.title || r.title).slice(0, 26)} · 기사 보기`, url: r.link }));
+  const linksOf = (t) => [...t.script.slides.filter((s) => okUrl(s.url)).map((s) => ({ name: s.site || s.title, url: s.url })), ...newsLinks(t)];
+  const posts = (await loadDb()).filter((t) => t.status === "posted" && t.script?.slides && linksOf(t).length)
     .sort((a, b) => String(b.posted_at).localeCompare(String(a.posted_at)))
-    .map((t) => ({ title: t.script.hook, date: t.posted_at, cover: t.cover_url, permalink: t.permalink,
-      links: t.script.slides.filter((s) => okUrl(s.url)).map((s) => ({ name: s.site || s.title, url: s.url })) }));
+    .map((t) => ({ title: t.script.hook, date: t.posted_at, cover: t.cover_url, permalink: t.permalink, links: linksOf(t) }));
   const r = await publishLinks(posts, { handle: CONFIG.handle, mascot: CONFIG.mascot, notice: CONFIG.affiliateNotice });
   log(`링크 페이지 ${r.changed ? "갱신" : "변경 없음"} (게시물 ${posts.length}건): ${r.url}`);
   return r;
@@ -582,7 +585,8 @@ async function officialEvents() {
       const xml = await (await fetch(`http://www.kopis.or.kr/openApi/restful/boxoffice?${new URLSearchParams({ service: env("KOPIS_KEY"), ststype: "week", date: ymd(new Date(now - 864e5)) })}`,
         { signal: AbortSignal.timeout(20_000) })).text();
       const rows = [...xml.matchAll(/<boxof>([\s\S]*?)<\/boxof>/g)].map((m) => (tag) => (m[1].match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1] ?? "").replace(/<!\[CDATA\[|\]\]>/g, "").trim());
-      for (const t of rows.slice(0, 10)) out.push({ title: `${t("prfnm")} (${t("cate")})`, source: `KOPIS 주간 예매 ${t("rnum")}위`, date: t("prfpd"), place: `${t("area")} ${t("prfplcnm")}`.trim(), link: "", official: true });
+      const poster = (p) => (!p ? "" : p.startsWith("http") ? p.replace(/^http:/, "https:") : `https://www.kopis.or.kr${p.startsWith("/") ? "" : "/"}${p}`);
+      for (const t of rows.slice(0, 10)) out.push({ title: `${t("prfnm")} (${t("cate")})`, source: `KOPIS 주간 예매 ${t("rnum")}위`, date: t("prfpd"), place: `${t("area")} ${t("prfplcnm")}`.trim(), link: "", official: true, image: poster(t("poster")) });
       if (!rows.length) log(`공연 자료를 읽지 못했습니다: ${xml.replace(/\s+/g, " ").slice(0, 120)}`);
     } catch (e) { log(`공연 자료 실패: ${e.message.slice(0, 100)}`); }
   }
@@ -594,7 +598,8 @@ async function officialEvents() {
         const rows = [d.response?.body?.items?.item ?? []].flat();
         const today = ymd(now), soon = ymd(new Date(now.getTime() + 7 * 864e5));
         const live = rows.filter((r) => r.eventstartdate <= soon && r.eventenddate >= today);           // 지금 열리고 있거나 일주일 안에 시작
-        for (const r of live.slice(0, 25)) out.push({ title: r.title, source: "한국관광공사", date: `${nice(r.eventstartdate)}~${nice(r.eventenddate)}`, place: String(r.addr1 ?? "").split(" ").slice(0, 2).join(" "), link: "", official: true });
+        for (const r of live.slice(0, 25)) out.push({ title: r.title, source: "한국관광공사", date: `${nice(r.eventstartdate)}~${nice(r.eventenddate)}`, place: String(r.addr1 ?? "").split(" ").slice(0, 2).join(" "), link: "", official: true,
+          image: String(r.firstimage ?? "").replace(/^http:/, "https:") });      // 한국관광공사가 함께 주는 축제 대표 사진
         if (rows.length) break;
       } catch (e) { log(`축제 자료 실패(${svc.split("/")[0]}): ${e.message.slice(0, 100)}`); }
     }
@@ -628,13 +633,19 @@ export async function writeNews() {
 쓰는 규칙:
 - 기사 제목에 나온 사실만 써라. 제목에 없는 날짜·할인율·장소·조건을 지어내지 마라. 제목에 기간이 없으면 기간을 말하지 마라.
 - 매체가 "KOPIS"나 "한국관광공사"인 항목은 공식 자료다. 거기 적힌 기간과 장소는 그대로 써도 된다. 공연은 "지금 예매 순위 ○위"라는 점을 살려라.
-- slides의 각 장: no는 고른 기사의 번호. title은 무엇인지 한눈에 (브랜드·행사 이름 포함, 16자 이내). body는 제목에서 확인되는 내용을 1~2문장으로 풀어 쓰고, 마지막에 "자세한 기간과 조건은 공식 채널에서 확인하세요"를 붙인다.
-- photo: 그 장에 넣을 사진 검색어. 브랜드 로고가 아니라 관련된 사물·장소를 영어 명사로, 쉼표로 2~3개 (예: "shopping bags, shopping mall", "festival lights, night market").
+- slides의 각 장: no는 고른 기사의 번호. title은 무엇인지 한눈에 (브랜드·행사 이름 포함, 16자 이내). body는 제목에서 확인되는 내용을 1~2문장으로 풀어 쓴다. 공식 자료 항목은 기간과 장소를 꼭 넣어라.
+- body의 마지막 문장은 "어디서 확인하면 되는지"를 이름으로 알려 줘라. "공식 채널에서 확인하세요"처럼 어디인지 모르는 말은 쓰지 마라.
+  · 브랜드·매장 소식: "자세한 내용은 ○○ 공식 홈페이지나 인스타그램에서 확인하세요." (○○은 제목에 나온 브랜드·매장 이름 그대로)
+  · 한국관광공사 항목(축제): "자세한 일정은 '대한민국 구석구석'에서 축제 이름으로 검색해 보세요."
+  · KOPIS 항목(공연): "예매는 인터파크·예스24 같은 예매처에서 공연 이름으로 검색하세요."
+  · 주최가 지자체·기관이면 그 기관 이름을 써라 (예: "서울시 홈페이지"). 주소(URL)나 계정 아이디는 지어내지 마라.
+- photo: 그 장에 넣을 사진 검색어. 그 소식에서 실제로 보게 될 "물건이나 장소"를 영어 명사로, 쉼표로 2~3개. 브랜드 이름, 로고, 그리고 popup·event·sale·festival 같은 뜻이 넓은 낱말만 쓰면 엉뚱한 사진이 나온다.
+  (예: 어그 팝업 → "sheepskin boots, winter boots" / 백화점 세일 → "department store, shopping bags" / 빛 축제 → "light festival night, illumination" / 굴 축제 → "oysters, seafood market")
 - cover_photo: 표지 배경 사진 검색어 (같은 방식).
 ${await hookRules()}
 - hook은 표지 제목이다 (18자 이내). 소식 5개를 모두 아우르는 말이어야 한다. 소식 하나만 가리키거나, 소식에 없는 주장("미리 사면 손해")을 하면 안 된다. "이번 주"라는 시기가 느껴지게 써라 (예: "이번 주 놓치면 아까운 5가지", "이번 주말 갈 곳 정해 드림"). sub는 표지 아래 한 줄 (22자 이내, 예: "${d.getMonth() + 1}월 ${Math.ceil(d.getDate() / 7)}째 주 소식 5가지").
 - cta: 마지막 장 문구 (16자 이내, 저장이나 같이 갈 친구 태그를 유도).
-- caption: 첫 줄은 궁금하게 만드는 한 문장. 이어서 소식 5개를 번호와 함께 한 줄씩. 그다음 줄에 "기간과 조건은 바뀔 수 있어요. 가기 전에 공식 채널에서 꼭 확인하세요." 마지막 줄은 "🐝 ${CONFIG.mascot}가 알려 주는 이번 주 소식".
+- caption: 첫 줄은 궁금하게 만드는 한 문장. 이어서 소식 5개를 번호와 함께 한 줄씩 (무엇인지 + 어디서 확인하는지: "○○ 공식 홈페이지"처럼 이름으로). 그다음 줄에 "기간과 조건은 바뀔 수 있어요. 가기 전에 위에 적은 곳에서 한 번 더 확인하세요." 마지막 줄은 "🐝 ${CONFIG.mascot}가 알려 주는 이번 주 소식".
 - hashtags: 한국어 해시태그 6개를 공백으로 구분. name: 관리용 제목 (20자 이내).
 - 고를 만한 소식이 3개보다 적으면 {"skip": true, "reason": "이유"}만 답하라.
 
@@ -648,7 +659,10 @@ JSON으로만 답하라: {"name":"","hook":"","hook_alts":["",""],"sub":"","cove
   const refs = rows.map((x) => items[Number(x.no) - 1]);
   const script = normalizeScript({ ...raw, slides: rows }, 6);
   if (script.slides.length < 3 || script.slides.length !== refs.length) return { skip: true, reason: "소식을 3개 이상 고르지 못했습니다" };
-  script.caption = `${script.caption}\n\n출처: ${[...new Set(refs.map((r) => r.source))].join(", ")}`;
+  script.slides.forEach((s, i) => { if (refs[i].image) s.image = refs[i].image; });      // 공식 자료가 준 사진(축제 대표 사진, 공연 포스터)이 있으면 그것을 씀
+  script.slides = script.slides.map((s) => ({ ...s, body: s.body.replace(/공식 채널/g, "공식 홈페이지") }));   // 어디인지 모를 말은 남기지 않음
+  const hasLinks = linksEnabled() && refs.some((r) => okUrl(r.link));
+  script.caption = `${script.caption.replace(/공식 채널/g, "공식 홈페이지")}${hasLinks ? "\n\n🔗 프로필 링크를 누르면 소식마다 기사 원문을 바로 볼 수 있어요" : ""}\n\n출처: ${[...new Set(refs.map((r) => r.source))].join(", ")}`;
   return { script, refs };
 }
 
@@ -656,7 +670,7 @@ export function normalizeScript(d, max = 5) {
   const s = (v) => String(v ?? "").trim();
   const opt = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v));   // 값이 있는 항목만 남김
   const slides = (Array.isArray(d?.slides) ? d.slides : [])
-    .map((x) => ({ title: s(x?.title), body: s(x?.body), keyword: s(x?.keyword), ...opt({ shoot: s(x?.shoot), alt: s(x?.alt), site: s(x?.site), url: s(x?.url), shot: s(x?.shot), photo: s(x?.photo) }) }))
+    .map((x) => ({ title: s(x?.title), body: s(x?.body), keyword: s(x?.keyword), ...opt({ shoot: s(x?.shoot), alt: s(x?.alt), site: s(x?.site), url: s(x?.url), shot: s(x?.shot), photo: s(x?.photo), image: okUrl(s(x?.image)) ? s(x?.image) : "" }) }))
     .filter((x) => x.title && x.body).slice(0, max);
   if (!s(d?.hook) || !slides.length) throw new Error("대본 형식 오류: 첫 문구와 팁(제목·설명) 1개 이상이 필요합니다");
   const hashtags = s(d.hashtags).split(/\s+/).filter((t) => !t.includes("내돈내산")).join(" ");   // 확인되지 않은 "내돈내산" 표시는 자동으로 뺌
@@ -666,7 +680,7 @@ export function normalizeScript(d, max = 5) {
 }
 
 // ── 3. 장면 준비: 음성 합성 + 자막 타이밍 + 배경 영상 ──
-function timeWords(text, seconds) {
+export function timeWords(text, seconds) {
   const parts = text.split(/\s+/).filter(Boolean);
   const total = parts.reduce((a, p) => a + p.length + 1, 0);
   const span = Math.max(0.5, seconds - 0.2) * 1000;
@@ -676,7 +690,7 @@ function timeWords(text, seconds) {
 
 // 음성 도구가 준 낱말별 시각(marks)을 화면에 띄울 낱말(띄어쓰기 단위, 문장부호 포함)에 맞춤.
 // 낱말 수가 서로 다를 수 있어(숫자·기호) 글자 수로 맞춰 가며 묶음. 맞추지 못하면 null → 글자 수 어림으로 대신함
-function alignWords(text, marks) {
+export function alignWords(text, marks) {
   const strip = (s) => s.replace(/[^\p{L}\p{N}]/gu, "");
   const out = [];
   let k = 0;
@@ -911,10 +925,35 @@ async function screenshot(url, outFile, tall = false) {
       document.documentElement.style.overflow = document.body.style.overflow = "visible";
     }).catch(() => {});
     await page.screenshot({ path: outFile, type: "png" });
-    // 너무 작으면 빈 화면으로 보고 버림. 장 전체를 채울 때는 기준을 높임 (한 가지 색뿐인 로딩 화면이 크게 들어가는 것을 막음)
-    return (await fs.stat(outFile)).size > (tall ? 150_000 : 20_000);
+    // 파일이 작으면 거의 빈 화면(한 가지 색뿐인 로딩 화면 등)으로 보고 버림 → 그 사이트의 대표 이미지나 사진으로 대신함
+    return (await fs.stat(outFile)).size > (tall ? 150_000 : 90_000);
   } catch { return false; }
   finally { await browser?.close().catch(() => {}); }
+}
+
+// 주소의 이미지를 내려받음 (공식 자료가 준 사진, 사이트의 대표 이미지). 이미지가 아니거나 너무 작으면 쓰지 않음
+async function fetchImage(url, outFile) {
+  try {
+    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(30_000), headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*" } });
+    const type = res.headers.get("content-type") ?? "";
+    if (!res.ok || !type.startsWith("image/") || type.includes("svg")) return false;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 8_000 || buf.length > 15e6) return false;
+    await fs.writeFile(outFile, buf);
+    return true;
+  } catch { return false; }
+}
+// 사이트가 스스로 내건 대표 이미지(링크를 공유할 때 뜨는 그림, og:image). 화면을 못 찍었을 때 그 사이트를 소개하는 장에 씀
+async function siteImage(url, outFile) {
+  try {
+    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15_000), headers: { "Accept-Language": "ko,en", "User-Agent": "Mozilla/5.0" } });
+    if (!res.ok) return false;
+    const html = (await res.text()).slice(0, 200_000);
+    const src = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)(?::src)?["'][^>]+content=["']([^"']+)["']/i)?.[1]
+      ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)(?::src)?["']/i)?.[1];
+    if (!src) return false;
+    return await fetchImage(new URL(src.replace(/&amp;/g, "&"), res.url || url).href, outFile);
+  } catch { return false; }
 }
 
 const shotDir = (code) => path.join(ROOT, "data", "shots", code.replace(/[^\w-]/g, "_"));
@@ -961,19 +1000,23 @@ export function renderCards(script, name, { full = false } = {}) {
       const pages = [{ kind: "cover", title: script.hook, body: script.sub, photo: cover ? `job/${jobId}/${coverName}` : null }];
       let photos = cover ? 1 : 0;
       for (const [i, s] of script.slides.entries()) {
-        let shot = false, photo = false;
+        let shot = false, photo = false, wide = false;
         const own = s.shot && path.join(shotDir(name), path.basename(s.shot));       // 직접 올린 화면 사진이 있으면 그것을 씀
         const shotName = `shot${i}${own ? path.extname(own) : ".png"}`;
         if (own && existsSync(own)) { await fs.copyFile(own, path.join(jobPublic, shotName)); shot = true; }
         else if (s.url) {
           shot = await screenshot(s.url, path.join(jobPublic, shotName), full);
-          if (!shot) log(`사이트 화면을 자동으로 못 찍었습니다 (${s.url}) — 글만 넣습니다. 직접 찍은 사진을 올릴 수 있습니다`);
+          if (!shot) {                                   // 화면이 비어 있거나 못 찍었으면 그 사이트의 대표 이미지로 대신함
+            shot = wide = await siteImage(s.url, path.join(jobPublic, shotName));
+            log(shot ? `사이트 화면 대신 대표 이미지를 넣었습니다 (${s.url})` : `사이트 화면도 대표 이미지도 얻지 못했습니다 (${s.url}) — 사진이나 글로 대신합니다. 직접 찍은 사진을 올릴 수 있습니다`);
+          }
         }
-        // 사이트 화면이 없는 장에는 내용에 맞는 사진을 넣음
-        if (!shot && s.photo) photo = await stockPhoto(s.photo, path.join(jobPublic, `photo${i}.jpg`), used, `${s.title} — ${s.body}`);
+        // 공식 자료가 준 사진(축제 대표 사진, 공연 포스터)이 있으면 그것을, 없으면 내용에 맞는 무료 사진을 넣음
+        if (!shot && s.image) photo = await fetchImage(s.image, path.join(jobPublic, `photo${i}.jpg`));
+        if (!shot && !photo && s.photo) photo = await stockPhoto(s.photo, path.join(jobPublic, `photo${i}.jpg`), used, `${s.title} — ${s.body}`);
         if (shot || photo) photos++;
         pages.push({ kind: "card", index: i + 1, title: s.title, body: s.body, shot: shot ? `job/${jobId}/${shotName}` : null,
-          photo: photo ? `job/${jobId}/photo${i}.jpg` : null, full: full && Boolean(shot),
+          photo: photo ? `job/${jobId}/photo${i}.jpg` : null, full: full && Boolean(shot) && !wide,      // 대표 이미지는 가로로 길어서 꽉 채우지 않음
           site: [s.site, s.url && shortUrl(s.url)].filter(Boolean).join(" · ") });      // 카드에도 주소를 적어 보고 따라 칠 수 있게
       }
       pages.push({ kind: "end", title: script.cta });
@@ -1568,6 +1611,7 @@ export async function reviseScript(tip, instruction) {
 - 고칠 점에서 말한 부분만 바꾸고, 나머지는 글자 하나도 바꾸지 마라.
 - JSON의 구조와 항목 이름을 그대로 유지하고, 모든 항목을 빠짐없이 돌려줘라 (photo, url, site, shot, keyword, shoot, alt, hook_alts, cover_photo 등 있는 것은 전부).
 - slides는 순서대로 1장, 2장…이다. 장을 빼라고 하면 빼고, 더하라고 하면 같은 형식으로 더한다.
+- 장에 image(공식 자료가 준 사진 주소)가 있으면 그대로 둔다. 주인이 그 장의 사진을 바꿔 달라고 했을 때만 image를 빼고 photo를 고친다.
 - 사진을 바꿔 달라고 하면 그 장의 photo를 다른 영어 검색어로 바꾼다 (화면에 보일 사물을 명사로, 쉼표로 2~3개). 표지 사진은 cover_photo, 영상 배경은 그 장의 keyword다.
 - 주인이 알려 준 사실(숫자, 날짜, 이름)은 그대로 쓴다. 주인이 말하지 않은 새 사실을 지어내지 마라.
 - 어떤 장의 내용이나 주제가 바뀌면, 그 장의 photo(또는 keyword)도 바뀐 내용에 맞는 사물로 고쳐라.

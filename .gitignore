@@ -1,4 +1,4 @@
-node_modules
+﻿node_modules
 out
 data
 assets
@@ -9,3 +9,5 @@ logs
 !.env.example
 .DS_Store
 *.zip
+explainers/*/out
+explainers/*/public

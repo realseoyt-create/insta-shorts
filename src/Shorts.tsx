@@ -4,8 +4,9 @@ import {
   useCurrentFrame, useVideoConfig,
 } from "remotion";
 import { Bee, HONEY, INK } from "./Bee";
+import { layoutCaptions, Word } from "./captions";
 
-export type Word = { text: string; startMs: number; endMs: number };
+export type { Word };
 export type Scene = {
   kind: "hook" | "tip" | "cta";
   label?: string;          // 팁 장면 위에 뜨는 제목
@@ -59,18 +60,6 @@ export function useFonts(text: string) {
   }, [handle, text]);
 }
 
-// 자막을 한 화면 분량(약 12자)씩 묶기
-function pages(words: Word[], maxChars: number) {
-  const out: Word[][] = [];
-  let cur: Word[] = [], len = 0;
-  for (const w of words) {
-    if (cur.length && len + w.text.length > maxChars) { out.push(cur); cur = []; len = 0; }
-    cur.push(w); len += w.text.length;
-    if (/[.!?,]$/.test(w.text) && len >= maxChars * 0.5) { out.push(cur); cur = []; len = 0; }
-  }
-  if (cur.length) out.push(cur);
-  return out;
-}
 
 export const Honeycomb: React.FC = () => (
   <svg width="100%" height="100%" style={{ position: "absolute", inset: 0 }}>
@@ -120,28 +109,35 @@ const Captions: React.FC<{ scene: Scene; instant?: boolean }> = ({ scene, instan
   const ms = (frame / fps) * 1000;
   const light = Boolean(scene.light), onCream = light && !scene.bg;
   const big = scene.kind !== "tip" && !light;
-  const ps = pages(scene.words, light ? 8 : big ? 9 : 12);
-  const page = ps.find((p) => ms < p[p.length - 1].endMs) ?? ps[ps.length - 1];
+  // 한 줄에 들어가는 글자 수를 글자 크기로 계산해, 묶음과 줄바꿈을 미리 정함 (화면이 알아서 줄을 바꾸게 두지 않음)
+  const size = light ? 132 : big ? 136 : 104, GAP = 26;
+  // 첫 문구는 표지로 쓰이므로 되도록 한 화면에 다 보이게 (세 줄까지)
+  const ps = layoutCaptions(scene.words, (1080 - 140) / size, GAP / size, scene.kind === "hook" ? { maxLines: 3, whole: true } : {});
+  const page = ps.find((p) => ms < p.words[p.words.length - 1].endMs) ?? ps[ps.length - 1];
   if (!page) return null;
-  const pageStart = Math.round((page[0].startMs / 1000) * fps);
+  const pageStart = Math.round((page.words[0].startMs / 1000) * fps);
   const pop = instant && page === ps[0] ? 1 : spring({ frame: frame - pageStart, fps, config: { damping: 14, stiffness: 220, mass: 0.6 } });
   const hook = scene.kind === "hook";     // 첫 문구는 아직 안 읽은 낱말도 흐리게 하지 않고 처음부터 또렷하게
   return (
     <div style={{
-      display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "0 26px", padding: "0 70px",
-      fontFamily: light ? HAND : scene.kind === "tip" ? BODY : DISPLAY, fontSize: light ? 132 : big ? 136 : 104,
+      display: "flex", flexDirection: "column", alignItems: "center", padding: "0 70px",
+      fontFamily: light ? HAND : scene.kind === "tip" ? BODY : DISPLAY, fontSize: size * page.fit,
       fontWeight: light ? 700 : scene.kind === "tip" ? 800 : 400,
-      lineHeight: 1.22, textAlign: "center", wordBreak: "keep-all",
+      lineHeight: 1.22, textAlign: "center", whiteSpace: "nowrap",
       transform: `scale(${interpolate(pop, [0, 1], [0.86, 1])})`, opacity: Math.min(1, pop * 1.5),
       textShadow: onCream ? "none" : light ? "0 4px 18px rgba(0,0,0,.65), 0 0 6px rgba(0,0,0,.45)" : "0 6px 24px rgba(0,0,0,.6)",
       WebkitTextStroke: light ? "0" : "2px rgba(0,0,0,.3)", wordSpacing: light ? "-0.18em" : undefined,
     }}>
-      {page.map((w, i) => {
-        const on = ms >= w.startMs;
-        const now = on && ms < w.endMs;
-        if (light) return <span key={i} style={{ color: onCream ? INK : "#fff" }}>{w.text}</span>;   // 밝은 스타일: 짧은 구절을 한 번에 보여 줌
-        return <span key={i} style={{ color: now ? HONEY : on || hook ? "#fff" : "rgba(255,255,255,.45)", transform: now ? "translateY(-6px)" : "none" }}>{w.text}</span>;
-      })}
+      {page.lines.map((line, li) => (
+        <div key={li} style={{ display: "flex", justifyContent: "center", gap: GAP * page.fit }}>
+          {line.map((w, i) => {
+            const on = ms >= w.startMs;
+            const now = on && ms < w.endMs;
+            if (light) return <span key={i} style={{ color: onCream ? INK : "#fff" }}>{w.text}</span>;   // 밝은 스타일: 짧은 구절을 한 번에 보여 줌
+            return <span key={i} style={{ color: now ? HONEY : on || hook ? "#fff" : "rgba(255,255,255,.45)", transform: now ? "translateY(-6px)" : "none" }}>{w.text}</span>;
+          })}
+        </div>
+      ))}
     </div>
   );
 };
